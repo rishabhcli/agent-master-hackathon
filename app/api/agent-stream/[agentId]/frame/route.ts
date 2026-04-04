@@ -23,10 +23,10 @@ function placeholderSvg(agentId: number) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { agentId: string } }
 ) {
-  if (!(await hasPreviewAccess())) {
+  if (!(await hasPreviewAccess(request))) {
     return new NextResponse("Unauthorized", {
       status: 401,
       headers: {

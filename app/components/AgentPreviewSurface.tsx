@@ -7,6 +7,7 @@ import {
   clearPreviewAccessTokenCookie,
   insforge,
   isUnsignedSessionError,
+  isPreviewAuthBypassed,
   primeInsforgeAccessTokenFromCookie,
   shouldBootstrapInsforgeSession,
   syncPreviewAccessTokenCookie
@@ -102,7 +103,9 @@ export function AgentPreviewSurface({ agentId }: { agentId: number }) {
 
     const loadPreview = async () => {
       try {
-        if (!shouldBootstrapInsforgeSession()) {
+        const allowGuestPreview = isPreviewAuthBypassed();
+
+        if (!allowGuestPreview && !shouldBootstrapInsforgeSession()) {
           if (!isMounted) return;
           clearPreviewAccessTokenCookie();
           setAccessError("Sign in to view the live local browser relay.");
@@ -121,32 +124,34 @@ export function AgentPreviewSurface({ agentId }: { agentId: number }) {
           return;
         }
 
-        primeInsforgeAccessTokenFromCookie();
-        const session = await insforge.auth.getCurrentUser();
-        if (session.error && !isUnsignedSessionError(session.error)) {
-          throw session.error;
-        }
+        if (!allowGuestPreview) {
+          primeInsforgeAccessTokenFromCookie();
+          const session = await insforge.auth.getCurrentUser();
+          if (session.error && !isUnsignedSessionError(session.error)) {
+            throw session.error;
+          }
 
-        if (!session.data?.user) {
-          if (!isMounted) return;
-          clearPreviewAccessTokenCookie();
-          setAccessError("Sign in to view the live local browser relay.");
-          setMetadata({
-            agentId,
-            status: "locked",
-            title: "Authentication required",
-            currentUrl: "",
-            updatedAt: null,
-            heartbeatAt: null,
-            note: "This panel is protected by InsForge authentication."
-          });
-          revokeObjectUrl();
-          lastPreviewKeyRef.current = null;
-          setFrameUrl(placeholderFrameUrl(agentId, "Authentication required"));
-          return;
-        }
+          if (!session.data?.user) {
+            if (!isMounted) return;
+            clearPreviewAccessTokenCookie();
+            setAccessError("Sign in to view the live local browser relay.");
+            setMetadata({
+              agentId,
+              status: "locked",
+              title: "Authentication required",
+              currentUrl: "",
+              updatedAt: null,
+              heartbeatAt: null,
+              note: "This panel is protected by InsForge authentication."
+            });
+            revokeObjectUrl();
+            lastPreviewKeyRef.current = null;
+            setFrameUrl(placeholderFrameUrl(agentId, "Authentication required"));
+            return;
+          }
 
-        syncPreviewAccessTokenCookie();
+          syncPreviewAccessTokenCookie();
+        }
 
         const result = await insforge.database
           .from("agents")

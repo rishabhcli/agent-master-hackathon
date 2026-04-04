@@ -4,6 +4,27 @@ import { createClient } from "@insforge/sdk";
 import { MASTERBUILD_PREVIEW_ACCESS_COOKIE } from "./previewAccess";
 
 const INSFORGE_CSRF_COOKIE = "insforge_csrf_token";
+const PREVIEW_AUTH_BYPASS_ENV =
+  process.env.NEXT_PUBLIC_MASTERBUILD_SKIP_PREVIEW_AUTH || process.env.NEXT_PUBLIC_MASTERBUILD_BYPASS_PREVIEW_AUTH;
+
+function isDevBypassEnabled() {
+  const normalized = (PREVIEW_AUTH_BYPASS_ENV ?? "").toLowerCase();
+  if (normalized === "1" || normalized === "true") {
+    return true;
+  }
+
+  return (
+    typeof window !== "undefined" &&
+    process.env.NODE_ENV !== "production" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname.endsWith(".local"))
+  );
+}
+
+export function isPreviewAuthBypassed() {
+  return isDevBypassEnabled();
+}
 
 export const INSFORGE_BASE_URL =
   process.env.NEXT_PUBLIC_INSFORGE_URL ?? "https://qnm7e5sc.us-west.insforge.app";
@@ -99,6 +120,10 @@ export function isUnsignedSessionError(error: unknown) {
 }
 
 export function shouldBootstrapInsforgeSession() {
+  if (isPreviewAuthBypassed()) {
+    return true;
+  }
+
   if (typeof window === "undefined" || typeof document === "undefined") {
     return false;
   }
