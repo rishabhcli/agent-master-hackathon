@@ -36,7 +36,7 @@ export async function GET(
   }
 
   const agentId = Number(params.agentId);
-  if (!Number.isFinite(agentId) || agentId < 1 || agentId > 9) {
+  if (!Number.isFinite(agentId) || agentId < 1 || agentId > 5) {
     return new NextResponse("Invalid agent id", { status: 400 });
   }
 

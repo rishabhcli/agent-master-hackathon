@@ -1,39 +1,346 @@
 "use client";
 
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Stars } from "@react-three/drei";
-import { useMemo } from "react";
-import { AgentPlane } from "./AgentPlane";
-import { BlackboardSphere } from "./BlackboardSphere";
-import { ConnectionLines } from "./ConnectionLines";
-import { CosmeticOrbs } from "./CosmeticOrbs";
-import { SignalParticles } from "./SignalParticle";
-import { AGENTS, type AgentData, type AgentSignal } from "../hooks/useAgentData";
+/* eslint-disable @next/next/no-img-element */
 
-function layoutAgents() {
-  return AGENTS.map((agent, index) => {
-    const angle = (index / AGENTS.length) * Math.PI * 2;
-    const radius = 4.2;
+import { Monitor, PanelsTopLeft } from "lucide-react";
+import { useMemo, useState } from "react";
+import { AGENTS, type AgentData, type AgentSignal } from "../hooks/useAgentData";
+import { useAgentPreview } from "../hooks/useAgentPreview";
+
+interface SessionViewModel {
+  id: string;
+  agentId: number;
+  name: string;
+  color: string;
+  baseRole: string;
+  platform: string;
+  status: string;
+  currentUrl: string;
+  isActive: boolean;
+}
+
+const CARD_GAP = 14;
+const RIGHT_LOG_GUTTER = 410;
+
+function isInteractiveStatus(status: string) {
+  return !["idle", "stopped", "error"].includes(status);
+}
+
+function formatPlatform(platform: string) {
+  switch (platform) {
+    case "youtube":
+      return "YouTube";
+    case "x":
+      return "X";
+    case "reddit":
+      return "Reddit";
+    case "substack":
+      return "Substack";
+    case "market_research":
+      return "Market Research";
+    default:
+      return platform;
+  }
+}
+
+function getStatusTone(status: string, isActive: boolean) {
+  if (status === "error") {
     return {
-      ...agent,
-      position: [Math.sin(angle) * radius, 0.15, Math.cos(angle) * radius] as [number, number, number],
-      rotation: [0, -angle, 0] as [number, number, number]
+      badge: "rgba(248, 113, 113, 0.18)",
+      border: "rgba(248, 113, 113, 0.36)",
+      text: "#fda4af"
     };
+  }
+
+  if (isActive) {
+    return {
+      badge: "rgba(52, 211, 153, 0.16)",
+      border: "rgba(52, 211, 153, 0.3)",
+      text: "#86efac"
+    };
+  }
+
+  return {
+    badge: "rgba(71, 85, 105, 0.24)",
+    border: "rgba(71, 85, 105, 0.32)",
+    text: "#cbd5e1"
+  };
+}
+
+function SessionCard({
+  session,
+  onSelect
+}: {
+  session: SessionViewModel;
+  onSelect: (agentId: number) => void;
+}) {
+  const { frameUrl, metadata, accessError } = useAgentPreview(session.agentId, {
+    enabled: true
   });
+  const status = metadata.status || session.status;
+  const tone = getStatusTone(status, session.isActive);
+
+  return (
+    <button
+      type="button"
+      data-testid={`session-card-${session.agentId}`}
+      onClick={() => onSelect(session.agentId)}
+      style={{
+        width: "100%",
+        minWidth: 0,
+        height: "100%",
+        padding: 0,
+        borderRadius: 16,
+        border: `1px solid ${session.color}40`,
+        background: "rgba(6, 11, 22, 0.92)",
+        color: "#e2e8f0",
+        display: "grid",
+        gridTemplateRows: "1fr auto",
+        overflow: "hidden",
+        cursor: "pointer",
+        boxShadow: `0 12px 32px ${session.color}10`,
+        transition: "transform 280ms cubic-bezier(0.16, 1, 0.3, 1), border-color 280ms ease, box-shadow 280ms ease",
+        willChange: "transform"
+      }}
+    >
+      <div
+        style={{
+          position: "relative",
+          overflow: "hidden",
+          background: "#020408",
+          borderBottom: "1px solid rgba(51, 65, 85, 0.4)",
+          minHeight: 0
+        }}
+      >
+        <img
+          src={frameUrl}
+          alt={`${session.name} preview`}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block"
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            inset: "auto 10px 10px 10px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8
+          }}
+        >
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "5px 8px",
+              borderRadius: 999,
+              background: "rgba(2, 6, 14, 0.76)",
+              border: "1px solid rgba(148, 163, 184, 0.2)",
+              fontSize: 9,
+              letterSpacing: 1.2,
+              textTransform: "uppercase",
+              color: "#cbd5e1",
+              backdropFilter: "blur(8px)"
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                background: session.isActive ? session.color : "#64748b",
+                boxShadow: session.isActive ? `0 0 12px ${session.color}` : "none"
+              }}
+            />
+            {formatPlatform(session.platform)}
+          </div>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "5px 8px",
+              borderRadius: 999,
+              background: tone.badge,
+              border: `1px solid ${tone.border}`,
+              fontSize: 9,
+              letterSpacing: 1.1,
+              textTransform: "uppercase",
+              color: tone.text,
+              backdropFilter: "blur(8px)"
+            }}
+          >
+            {status}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: "8px 12px 10px", display: "grid", gap: 3, textAlign: "left" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f8fafc" }}>{session.name}</div>
+          <div style={{ fontSize: 9, letterSpacing: 1.3, textTransform: "uppercase", color: session.color }}>
+            {session.baseRole}
+          </div>
+        </div>
+
+        <div
+          style={{
+            fontSize: 11,
+            color: "#64748b",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis"
+          }}
+          title={metadata.currentUrl || metadata.note || session.currentUrl}
+        >
+          {metadata.currentUrl || metadata.note || session.currentUrl || "Waiting for live session"}
+        </div>
+
+        <div style={{ fontSize: 9, color: accessError ? "#fda4af" : "#475569" }}>
+          {accessError
+            ? accessError
+            : metadata.updatedAt
+              ? `Updated ${new Date(metadata.updatedAt).toLocaleTimeString()}`
+              : "Awaiting first relay frame"}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function FocusedSession({
+  session,
+  onBack
+}: {
+  session: SessionViewModel;
+  onBack: () => void;
+}) {
+  const { frameUrl, metadata, accessError } = useAgentPreview(session.agentId);
+  const status = metadata.status || session.status;
+  const tone = getStatusTone(status, session.isActive);
+
+  return (
+    <div
+      data-testid="session-focus"
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "grid",
+        gridTemplateRows: "auto 1fr auto",
+        gap: 16
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18 }}>
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: session.color }}>
+            Focused Browser Session
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#f8fafc" }}>{session.name}</div>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "7px 11px",
+                borderRadius: 999,
+                background: tone.badge,
+                border: `1px solid ${tone.border}`,
+                fontSize: 10,
+                letterSpacing: 1.2,
+                textTransform: "uppercase",
+                color: tone.text
+              }}
+            >
+              {status}
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid="session-back"
+          onClick={onBack}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "11px 16px",
+            borderRadius: 14,
+            border: "1px solid rgba(100, 116, 139, 0.28)",
+            background: "rgba(8, 15, 28, 0.86)",
+            color: "#e2e8f0",
+            cursor: "pointer"
+          }}
+        >
+          <PanelsTopLeft size={16} />
+          Back to sessions
+        </button>
+      </div>
+
+      <div
+        style={{
+          minHeight: 0,
+          borderRadius: 26,
+          overflow: "hidden",
+          background: "rgba(4, 10, 19, 0.92)",
+          border: `1px solid ${session.color}33`,
+          boxShadow: `0 24px 80px ${session.color}16`,
+          transform: "translateZ(0)"
+        }}
+      >
+        <img
+          src={frameUrl}
+          alt={`${session.name} focused preview`}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        />
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 8,
+          padding: "18px 20px",
+          borderRadius: 20,
+          background: "rgba(5, 10, 18, 0.9)",
+          border: "1px solid rgba(51, 65, 85, 0.4)"
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ fontSize: 13, color: "#f8fafc" }}>{metadata.title || `${session.baseRole} session`}</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>{formatPlatform(session.platform)}</div>
+        </div>
+        <div style={{ fontSize: 12, color: "#64748b", wordBreak: "break-all" }}>
+          {metadata.currentUrl || metadata.note || session.currentUrl || "Waiting for local browser session"}
+        </div>
+        <div style={{ fontSize: 11, color: accessError ? "#fda4af" : "#475569" }}>
+          {accessError
+            ? accessError
+            : metadata.updatedAt
+              ? `Relay updated ${new Date(metadata.updatedAt).toLocaleTimeString()}`
+              : "Awaiting first relay frame"}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function CommandCenterScene({
   agents,
-  signals,
-  liveUrls,
-  isRunning
+  liveUrls
 }: {
   agents: AgentData[];
   signals: AgentSignal[];
   liveUrls: Record<number, string | null>;
   isRunning: boolean;
 }) {
-  const layout = useMemo(() => layoutAgents(), []);
+  const [focusedAgentId, setFocusedAgentId] = useState<number | null>(null);
+
   const agentMap = useMemo(() => {
     const map = new Map<number, AgentData>();
     for (const agent of agents) {
@@ -42,51 +349,106 @@ export function CommandCenterScene({
     return map;
   }, [agents]);
 
+  const sessions = useMemo(() => {
+    return AGENTS
+      .filter((agent) => agent.agentId !== 5)
+      .map((agent) => {
+        const runtimeAgent = agentMap.get(agent.agentId);
+        const currentUrl = runtimeAgent?.current_url ?? "";
+        const status = runtimeAgent?.status ?? "idle";
+        const isActive =
+          Boolean(liveUrls[agent.agentId] ?? `/agent-stream/${agent.agentId}`) &&
+          (Boolean(currentUrl) || isInteractiveStatus(status));
+
+        return {
+          id: agent.id,
+          agentId: agent.agentId,
+          name: agent.name,
+          color: agent.color,
+          baseRole: agent.baseRole,
+          platform: agent.platform,
+          status,
+          currentUrl,
+          isActive
+        } satisfies SessionViewModel;
+      });
+  }, [agentMap, liveUrls]);
+
+  const focusedSession = focusedAgentId
+    ? sessions.find((session) => session.agentId === focusedAgentId) ?? null
+    : null;
+
   return (
-    <div style={{ position: "absolute", inset: 0 }}>
-      <Canvas camera={{ position: [0, 2.6, 6.6], fov: 52 }}>
-        <ambientLight intensity={0.28} />
-        <directionalLight intensity={0.65} position={[4, 5, 4]} color="#7dd3fc" />
-        <pointLight intensity={1.1} position={[0, 1.2, 0]} color="#22d3ee" />
-        <fog attach="fog" args={["#020408", 8, 22]} />
-        <Stars radius={80} depth={70} count={2600} factor={3} fade speed={0.2} />
+    <div
+      data-testid="session-workspace"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "linear-gradient(180deg, #06101b 0%, #020408 42%, #010204 100%)"
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: `96px ${RIGHT_LOG_GUTTER}px 164px 24px`,
+          display: "grid",
+          gridTemplateRows: "auto 1fr",
+          gap: 14,
+          minWidth: 0
+        }}
+      >
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 11, letterSpacing: 2.6, textTransform: "uppercase", color: "#22d3ee" }}>
+            Browser Sessions
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#f8fafc" }}>
+            {focusedSession ? focusedSession.name : "4 Active Agents"}
+          </div>
+        </div>
 
-        <OrbitControls
-          enablePan={false}
-          minDistance={3.8}
-          maxDistance={11}
-          minPolarAngle={Math.PI * 0.24}
-          maxPolarAngle={Math.PI * 0.62}
-          autoRotate={!isRunning}
-          autoRotateSpeed={0.4}
-          target={[0, 0.35, 0]}
-        />
+        {focusedSession ? (
+          <FocusedSession session={focusedSession} onBack={() => setFocusedAgentId(null)} />
+        ) : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gridTemplateRows: "1fr 1fr",
+              gap: CARD_GAP,
+              minHeight: 0
+            }}
+          >
+            {sessions.map((session) => (
+              <SessionCard
+                key={session.agentId}
+                session={session}
+                onSelect={setFocusedAgentId}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.9, 0]}>
-          <circleGeometry args={[7.5, 60]} />
-          <meshBasicMaterial color="#06101d" transparent opacity={0.65} />
-        </mesh>
-
-        <BlackboardSphere isActive={isRunning} />
-        <ConnectionLines isActive={isRunning} />
-        <SignalParticles signals={signals} />
-        <CosmeticOrbs isActive={isRunning} />
-
-        {layout.map((agent) => (
-          <AgentPlane
-            key={agent.agentId}
-            position={agent.position}
-            rotation={agent.rotation}
-            agentName={agent.name}
-            agentColor={agent.color}
-            agentRole={agent.baseRole}
-            agentId={agent.agentId}
-            status={agentMap.get(agent.agentId)?.status ?? "idle"}
-            liveUrl={liveUrls[agent.agentId] ?? null}
-            isActive={Boolean(liveUrls[agent.agentId])}
-          />
-        ))}
-      </Canvas>
+      <div
+        style={{
+          position: "absolute",
+          left: 24,
+          bottom: 112,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 14px",
+          borderRadius: 14,
+          background: "rgba(4, 10, 19, 0.78)",
+          border: "1px solid rgba(71, 85, 105, 0.2)",
+          color: "#94a3b8",
+          fontSize: 11,
+          pointerEvents: "none"
+        }}
+      >
+        <Monitor size={14} />
+        Local browser relay only.
+      </div>
     </div>
   );
 }

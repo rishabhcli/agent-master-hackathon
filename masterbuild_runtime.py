@@ -36,7 +36,7 @@ class AgentSpec:
 
 
 AGENT_SPECS: tuple[AgentSpec, ...] = (
-    AgentSpec(1, "Echo", "youtube", "Shorts Scan"),
+    AgentSpec(1, "Echo", "youtube", "Video Scan"),
     AgentSpec(2, "Pulse", "x", "Conversation Scan"),
     AgentSpec(3, "Thread", "reddit", "Community Scan"),
     AgentSpec(4, "Ledger", "substack", "Narrative Scan"),
@@ -707,7 +707,7 @@ class MasterBuildAI:
     ) -> dict[str, Any]:
         system_prompt = (
             "You are a product strategist performing market research from social-platform inspiration. "
-            "You will receive discovery records from browser sessions on YouTube Shorts, X, Reddit, and Substack. "
+            "You will receive discovery records from browser sessions on YouTube, X, Reddit, and Substack. "
             "Return only JSON with keys market_research_summary, key_signals, and options. "
             "key_signals must be an array of short strings. "
             "options must be an array of exactly 3 objects. "
@@ -900,6 +900,13 @@ class MasterBuildAI:
 
 
 class MasterBuildOrchestrator:
+    # ── Platform → LLM routing configuration ────────────────────────
+    # Platforms that benefit from GPT-4o-mini's reliable structured output
+    # (action-heavy navigation, frequent DOM interactions, bot-hostile sites).
+    # All other platforms default to MiniMax M2.7 (deeper reasoning, long-form).
+    OPENAI_PLATFORMS: set[str] = {"youtube", "x"}
+    MINIMAX_PLATFORMS: set[str] = {"reddit", "substack"}
+
     def __init__(self) -> None:
         self.client = InsForgeRuntimeClient()
         self.preview_manager = PreviewManager()
@@ -910,8 +917,12 @@ class MasterBuildOrchestrator:
         self.headless = os.getenv("MASTERBUILD_HEADLESS", "true").lower() != "false"
         self.agent_cycle_delay = float(os.getenv("MASTERBUILD_AGENT_CYCLE_DELAY", "3"))
         self.navigation_wait = float(os.getenv("MASTERBUILD_NAVIGATION_WAIT", "2"))
+        # OpenAI config for browser-use navigation on action-heavy platforms
+        self._openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        self._openai_browser_model = os.getenv("OPENAI_BROWSER_MODEL", "gpt-4o-mini")
+        self._openai_available = bool(self._openai_api_key)
 
-    def _create_llm(self):
+    def _create_minimax_llm(self):
         """Create a browser-use ChatOpenAI backed by MiniMax M2.7 with think-tag stripping.
 
         MiniMax M2.7 wraps responses in <think>...</think> tags. browser-use's
@@ -955,16 +966,79 @@ class MasterBuildOrchestrator:
             add_schema_to_system_prompt=True,
         )
 
+    def _create_openai_llm(self):
+        """Create a browser-use ChatOpenAI backed by OpenAI GPT-4o-mini.
+
+        GPT-4o-mini natively produces clean structured output that browser-use
+        expects, so no think-tag stripping or output_format workarounds needed.
+        Used for action-heavy platforms (YouTube, X) where reliable structured
+        actions (click, scroll, type) are critical.
+        """
+        from browser_use.llm.openai.chat import ChatOpenAI as _ChatOpenAI
+
+        return _ChatOpenAI(
+            model=self._openai_browser_model,
+            api_key=self._openai_api_key,
+            base_url="https://api.openai.com/v1",
+            temperature=0.2,
+            max_completion_tokens=4096,
+        )
+
+    def _create_llm_for_platform(self, platform: str):
+        """Select the best browser-use LLM for the given platform.
+
+        Routing logic:
+        - youtube, x  → GPT-4o-mini (reliable structured output, fast actions)
+        - reddit, substack → MiniMax M2.7 (deeper reasoning over long-form text)
+
+        Falls back to MiniMax if OPENAI_API_KEY is not configured.
+        """
+        use_openai = (
+            platform in self.OPENAI_PLATFORMS
+            and self._openai_available
+        )
+
+        if use_openai:
+            model_label = f"OpenAI {self._openai_browser_model}"
+            print(f"[llm-router] Platform '{platform}' → {model_label}")
+            return self._create_openai_llm(), model_label
+        else:
+            model_label = f"MiniMax {self.ai.model}"
+            if platform in self.OPENAI_PLATFORMS and not self._openai_available:
+                print(f"[llm-router] Platform '{platform}' prefers OpenAI but OPENAI_API_KEY missing → falling back to {model_label}")
+            else:
+                print(f"[llm-router] Platform '{platform}' → {model_label}")
+            return self._create_minimax_llm(), model_label
+
     async def verify_llm(self) -> bool:
-        """Health-check the LLM before starting a mission."""
+        """Health-check LLMs before starting a mission."""
+        minimax_ok = False
         try:
             resp = await self.ai.generate_chat_completion("You are a test. Do NOT use any thinking tags. Reply with just the word OK.", "Reply OK.", max_tokens=200)
             if resp and len(resp) > 0:
-                print(f"[orchestrator] LLM health check passed: {resp}")
-                return True
+                print(f"[orchestrator] MiniMax health check passed: {resp}")
+                minimax_ok = True
         except Exception as e:
-            print(f"[orchestrator] ⚠ LLM health check FAILED: {e}")
-        return False
+            print(f"[orchestrator] ⚠ MiniMax health check FAILED: {e}")
+
+        if self._openai_available:
+            try:
+                test_client = AsyncOpenAI(api_key=self._openai_api_key)
+                test_resp = await test_client.chat.completions.create(
+                    model=self._openai_browser_model,
+                    messages=[{"role": "user", "content": "Reply OK."}],
+                    max_tokens=10,
+                )
+                if test_resp.choices and test_resp.choices[0].message.content:
+                    print(f"[orchestrator] OpenAI ({self._openai_browser_model}) health check passed")
+                await test_client.close()
+            except Exception as e:
+                print(f"[orchestrator] ⚠ OpenAI health check FAILED: {e} — YouTube/X agents will fall back to MiniMax")
+                self._openai_available = False
+        else:
+            print("[orchestrator] ⚠ OPENAI_API_KEY not set — all browser agents will use MiniMax M2.7")
+
+        return minimax_ok
 
     async def close(self) -> None:
         await self.brave.close()
@@ -1002,7 +1076,7 @@ class MasterBuildOrchestrator:
         llm_ok = await self.verify_llm()
         if not llm_ok:
             await self.client.update_mission(mission_id, status="error", stopped_at=utc_now())
-            await self.client.append_log(mission_id, agent_id=None, log_type="error", message="❌ LLM key is invalid or expired. Set a valid MINIMAX_API_KEY in .env.local and restart.", metadata={})
+            await self.client.append_log(mission_id, agent_id=None, log_type="error", message="❌ MiniMax key is invalid or expired. Set a valid MINIMAX_API_KEY in .env.local and restart.", metadata={})
             return
 
         await self.client.update_mission(
@@ -1011,12 +1085,14 @@ class MasterBuildOrchestrator:
             started_at=utc_now(),
             final_options=None,
         )
+        openai_platforms = ", ".join(sorted(self.OPENAI_PLATFORMS)) if self._openai_available else "none (fallback to MiniMax)"
+        minimax_platforms = ", ".join(sorted(self.MINIMAX_PLATFORMS))
         await self.client.append_log(
             mission_id,
             agent_id=None,
             log_type="status",
-            message="Mission activated — Brave-curated browsing and market research enabled.",
-            metadata={"brave_enabled": self.brave.enabled},
+            message=f"Mission activated — Dual-LLM routing: OpenAI [{openai_platforms}] | MiniMax [{minimax_platforms}]",
+            metadata={"brave_enabled": self.brave.enabled, "openai_available": self._openai_available, "openai_model": self._openai_browser_model},
         )
         if not self.brave.enabled:
             await self.client.append_log(
@@ -1028,7 +1104,7 @@ class MasterBuildOrchestrator:
             )
 
         platform_labels = {
-            "youtube": "YouTube Shorts",
+            "youtube": "YouTube videos",
             "x": "X conversations",
             "reddit": "Reddit discussions",
             "substack": "Substack essays",
@@ -1730,9 +1806,9 @@ class MasterBuildOrchestrator:
             "youtube": {
                 "search_url": f"https://www.youtube.com/results?search_query={seed_queries[0].replace(' ', '+') if seed_queries else 'trending'}&sp=EgIYAQ%253D%253D",
                 "guide": (
-                    "You are researching YouTube Shorts for business insights.\n\n"
+                    "You are researching YouTube for business insights.\n\n"
                     "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above (it already filters for Shorts).\n"
+                    "1. Start at the search URL above.\n"
                     "2. Click the first 5–8 video thumbnails from search results — open each video.\n"
                     "3. On EVERY video page: read the FULL title, scroll down to see the description, "
                     "   view count, like count, and channel subscriber count. Scroll further to read the top 5 comments.\n"
@@ -1954,13 +2030,13 @@ class MasterBuildOrchestrator:
             await self._inject_stealth_scripts(browser)
 
             task_description = self._build_agent_task(spec, mission_prompt, seed_queries, curated_links)
-            llm = self._create_llm()
+            llm, model_label = self._create_llm_for_platform(spec.platform)
 
             agent_context.log_agent_action(spec.agent_id, "start", f"Seed queries: {', '.join(seed_queries)}")
             await self.client.append_log(
                 mission_id, agent_id=spec.agent_id, log_type="status",
-                message=f"🚀 Agent {spec.name} starting with browser-use + MiniMax M2.7",
-                metadata={"seed_queries": seed_queries, "curated_links": curated_links[:3]},
+                message=f"🚀 Agent {spec.name} starting with browser-use + {model_label}",
+                metadata={"seed_queries": seed_queries, "curated_links": curated_links[:3], "llm": model_label},
             )
 
             # Run browser-use Agent — it handles ALL browsing intelligence

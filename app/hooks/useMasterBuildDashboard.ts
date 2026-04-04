@@ -2,7 +2,37 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getInsforgeConfigError, hasInsforgeConfig, insforge } from "../lib/insforge";
-import type { AgentData, AgentSignal, DiscoveredContent, LogEntry } from "./useAgentData";
+import type { AgentData, AgentMemoryEntry, AgentSignal, AgentThought, BusinessPlan, DiscoveredContent, LogEntry } from "./useAgentData";
+
+export interface FinalOptionEvidence {
+  id: string;
+  platform: string;
+  title: string;
+  keywords: string;
+  summary: string;
+  url: string;
+}
+
+export interface FinalOption {
+  id: string;
+  title: string;
+  concept: string;
+  audience: string;
+  whyPromising: string;
+  marketAngle: string;
+  recommendedFormat: string;
+  evidence: FinalOptionEvidence[];
+}
+
+export interface FinalOptionsPayload {
+  generatedAt: string;
+  isFinal: boolean;
+  marketResearch: {
+    summary: string;
+    signals: string[];
+  };
+  options: FinalOption[];
+}
 
 interface MissionRecord {
   id: string;
@@ -13,13 +43,13 @@ interface MissionRecord {
   liveUrl3: string | null;
   liveUrl4: string | null;
   liveUrl5: string | null;
-  liveUrl6: string | null;
-  liveUrl7: string | null;
-  liveUrl8: string | null;
-  liveUrl9: string | null;
+  finalOptions: FinalOptionsPayload | null;
 }
 
-const REALTIME_CHANNELS = ["missions", "agents", "discoveries", "logs", "signals"] as const;
+const REALTIME_CHANNELS = [
+  "missions", "agents", "discoveries", "logs", "signals",
+  "agent_memory", "agent_thoughts", "business_plans", "builder_outputs"
+] as const;
 const REALTIME_EVENTS = REALTIME_CHANNELS.map((channel) => `${channel}_changed`);
 let realtimeSetupPromise: Promise<void> | null = null;
 
@@ -55,6 +85,26 @@ function toEpochMilliseconds(value: string | null | undefined) {
   return new Date(value).getTime();
 }
 
+function normalizeFinalOptions(value: unknown): FinalOptionsPayload | null {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    try {
+      return normalizeFinalOptions(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof value !== "object") {
+    return null;
+  }
+
+  return value as FinalOptionsPayload;
+}
+
 function normalizeMission(row: Record<string, unknown> | null | undefined): MissionRecord | null {
   if (!row || typeof row !== "object") {
     return null;
@@ -69,10 +119,7 @@ function normalizeMission(row: Record<string, unknown> | null | undefined): Miss
     liveUrl3: (row.live_url_3 as string | null | undefined) ?? null,
     liveUrl4: (row.live_url_4 as string | null | undefined) ?? null,
     liveUrl5: (row.live_url_5 as string | null | undefined) ?? null,
-    liveUrl6: (row.live_url_6 as string | null | undefined) ?? null,
-    liveUrl7: (row.live_url_7 as string | null | undefined) ?? null,
-    liveUrl8: (row.live_url_8 as string | null | undefined) ?? null,
-    liveUrl9: (row.live_url_9 as string | null | undefined) ?? null
+    finalOptions: normalizeFinalOptions(row.final_options)
   };
 }
 
@@ -145,12 +192,73 @@ function normalizeSignals(rows: unknown): AgentSignal[] {
   });
 }
 
+function normalizeThoughts(rows: unknown): AgentThought[] {
+  if (!Array.isArray(rows)) return [];
+
+  return rows.map((row) => {
+    const record = row as Record<string, unknown>;
+    return {
+      _id: String(record.id),
+      agent_id: record.agent_id != null ? Number(record.agent_id) : null,
+      thought_type: String(record.thought_type ?? "inference") as AgentThought["thought_type"],
+      prompt_summary: String(record.prompt_summary ?? ""),
+      response_summary: String(record.response_summary ?? ""),
+      action_taken: String(record.action_taken ?? ""),
+      model: String(record.model ?? ""),
+      tokens_used: Number(record.tokens_used ?? 0),
+      duration_ms: Number(record.duration_ms ?? 0),
+      timestamp: toEpochMilliseconds(record.created_at as string | null | undefined)
+    };
+  });
+}
+
+function normalizeMemory(rows: unknown): AgentMemoryEntry[] {
+  if (!Array.isArray(rows)) return [];
+
+  return rows.map((row) => {
+    const record = row as Record<string, unknown>;
+    return {
+      _id: String(record.id),
+      filename: String(record.filename ?? ""),
+      content: String(record.content ?? ""),
+      version: Number(record.version ?? 1),
+      updated_by: record.updated_by != null ? String(record.updated_by) : null,
+      timestamp: toEpochMilliseconds(record.updated_at as string | null | undefined)
+    };
+  });
+}
+
+function normalizeBusinessPlans(rows: unknown): BusinessPlan[] {
+  if (!Array.isArray(rows)) return [];
+
+  return rows.map((row) => {
+    const record = row as Record<string, unknown>;
+    return {
+      _id: String(record.id),
+      version: Number(record.version ?? 1),
+      market_opportunity: String(record.market_opportunity ?? ""),
+      competitive_landscape: String(record.competitive_landscape ?? ""),
+      revenue_models: String(record.revenue_models ?? ""),
+      user_acquisition: String(record.user_acquisition ?? ""),
+      risk_analysis: String(record.risk_analysis ?? ""),
+      confidence_score: Number(record.confidence_score ?? 0),
+      discovery_count: Number(record.discovery_count ?? 0),
+      is_final: Boolean(record.is_final),
+      raw_plan: String(record.raw_plan ?? ""),
+      timestamp: toEpochMilliseconds(record.created_at as string | null | undefined)
+    };
+  });
+}
+
 export function useMasterBuildDashboard() {
   const [latestMission, setLatestMission] = useState<MissionRecord | null>(null);
   const [agents, setAgents] = useState<AgentData[]>([]);
   const [discoveries, setDiscoveries] = useState<DiscoveredContent[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [signals, setSignals] = useState<AgentSignal[]>([]);
+  const [thoughts, setThoughts] = useState<AgentThought[]>([]);
+  const [memory, setMemory] = useState<AgentMemoryEntry[]>([]);
+  const [businessPlans, setBusinessPlans] = useState<BusinessPlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreatingMission, setIsCreatingMission] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -169,12 +277,18 @@ export function useMasterBuildDashboard() {
     reloadTokenRef.current = reloadToken;
 
     try {
-      const [missionResult, agentResult, discoveryResult, logResult, signalResult] = await Promise.all([
+      const [
+        missionResult, agentResult, discoveryResult, logResult, signalResult,
+        thoughtsResult, memoryResult, businessPlanResult,
+      ] = await Promise.all([
         insforge.database.from("missions").select("*").order("created_at", { ascending: false }).limit(1).maybeSingle(),
         insforge.database.from("agents").select("*").order("agent_id", { ascending: true }),
         insforge.database.from("discoveries").select("*").order("created_at", { ascending: false }).limit(100),
         insforge.database.from("logs").select("*").order("created_at", { ascending: false }).limit(60),
-        insforge.database.from("signals").select("*").order("created_at", { ascending: false }).limit(60)
+        insforge.database.from("signals").select("*").order("created_at", { ascending: false }).limit(60),
+        insforge.database.from("agent_thoughts").select("*").order("created_at", { ascending: false }).limit(100),
+        insforge.database.from("agent_memory").select("*").order("filename", { ascending: true }),
+        insforge.database.from("business_plans").select("*").order("created_at", { ascending: false }).limit(20),
       ]);
 
       const firstError =
@@ -183,6 +297,8 @@ export function useMasterBuildDashboard() {
         discoveryResult.error ??
         logResult.error ??
         signalResult.error;
+      // Don't fail on new tables not yet created — they are additive
+      // thoughtsResult.error, memoryResult.error, businessPlanResult.error are non-fatal
 
       if (firstError) {
         throw firstError;
@@ -198,6 +314,9 @@ export function useMasterBuildDashboard() {
         setDiscoveries(normalizeDiscoveries(discoveryResult.data));
         setLogs(normalizeLogs(logResult.data));
         setSignals(normalizeSignals(signalResult.data));
+        if (!thoughtsResult.error) setThoughts(normalizeThoughts(thoughtsResult.data));
+        if (!memoryResult.error) setMemory(normalizeMemory(memoryResult.data));
+        if (!businessPlanResult.error) setBusinessPlans(normalizeBusinessPlans(businessPlanResult.data));
         setError(null);
         setIsLoading(false);
       });
@@ -326,6 +445,9 @@ export function useMasterBuildDashboard() {
     discoveries,
     logs,
     signals,
+    thoughts,
+    memory,
+    businessPlans,
     isLoading,
     isCreatingMission,
     error,

@@ -8,7 +8,7 @@ export default function AgentStreamPage({
   params: { agentId: string };
 }) {
   const agentId = Number(params.agentId);
-  if (!Number.isFinite(agentId) || agentId < 1 || agentId > 9) {
+  if (!Number.isFinite(agentId) || agentId < 1 || agentId > 5) {
     return null;
   }
 

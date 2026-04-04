@@ -20,10 +20,6 @@ create table if not exists public.missions (
   live_url_3 text,
   live_url_4 text,
   live_url_5 text,
-  live_url_6 text,
-  live_url_7 text,
-  live_url_8 text,
-  live_url_9 text,
   started_at timestamptz,
   stopped_at timestamptz,
   created_at timestamptz not null default timezone('utc', now()),
@@ -33,9 +29,9 @@ create table if not exists public.missions (
 create table if not exists public.agents (
   id uuid primary key default gen_random_uuid(),
   mission_id uuid references public.missions(id) on delete cascade,
-  agent_id integer not null unique check (agent_id between 1 and 9),
+  agent_id integer not null unique check (agent_id between 1 and 5),
   name text not null,
-  platform text not null check (platform in ('tiktok', 'youtube', 'duckduckgo')),
+  platform text not null check (platform in ('youtube', 'x', 'reddit', 'substack', 'market_research')),
   role text not null,
   status text not null default 'idle'
     check (status in ('idle', 'searching', 'found_trend', 'weak', 'reassigning', 'exploiting', 'stopped', 'error')),
@@ -54,14 +50,25 @@ create table if not exists public.agents (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+alter table public.missions add column if not exists refined_idea text;
+alter table public.missions add column if not exists final_options jsonb;
+alter table public.missions drop column if exists live_url_6;
+alter table public.missions drop column if exists live_url_7;
+alter table public.missions drop column if exists live_url_8;
+alter table public.missions drop column if exists live_url_9;
+
 alter table public.agents add column if not exists preview_bucket text;
 alter table public.agents add column if not exists preview_key text;
 alter table public.agents add column if not exists preview_updated_at timestamptz;
+alter table public.agents drop constraint if exists agents_agent_id_check;
+alter table public.agents add constraint agents_agent_id_check check (agent_id between 1 and 5);
+alter table public.agents drop constraint if exists agents_platform_check;
+alter table public.agents add constraint agents_platform_check check (platform in ('youtube', 'x', 'reddit', 'substack', 'market_research'));
 
 create table if not exists public.discoveries (
   id uuid primary key default gen_random_uuid(),
   mission_id uuid references public.missions(id) on delete cascade,
-  agent_id integer not null check (agent_id between 1 and 9),
+  agent_id integer not null check (agent_id between 1 and 5),
   platform text not null,
   title text not null default '',
   source_url text not null,
@@ -73,6 +80,8 @@ create table if not exists public.discoveries (
   summary text not null default '',
   created_at timestamptz not null default timezone('utc', now())
 );
+alter table public.discoveries drop constraint if exists discoveries_agent_id_check;
+alter table public.discoveries add constraint discoveries_agent_id_check check (agent_id between 1 and 5);
 
 create table if not exists public.logs (
   id uuid primary key default gen_random_uuid(),
@@ -87,13 +96,17 @@ create table if not exists public.logs (
 create table if not exists public.signals (
   id uuid primary key default gen_random_uuid(),
   mission_id uuid references public.missions(id) on delete cascade,
-  from_agent integer not null check (from_agent between 1 and 9),
-  to_agent integer not null check (to_agent between 1 and 9),
+  from_agent integer not null check (from_agent between 1 and 5),
+  to_agent integer not null check (to_agent between 1 and 5),
   signal_type text not null,
   message text not null,
   payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default timezone('utc', now())
 );
+alter table public.signals drop constraint if exists signals_from_agent_check;
+alter table public.signals add constraint signals_from_agent_check check (from_agent between 1 and 5);
+alter table public.signals drop constraint if exists signals_to_agent_check;
+alter table public.signals add constraint signals_to_agent_check check (to_agent between 1 and 5);
 
 create table if not exists public.control_commands (
   id uuid primary key default gen_random_uuid(),
@@ -236,10 +249,6 @@ begin
     live_url_3,
     live_url_4,
     live_url_5,
-    live_url_6,
-    live_url_7,
-    live_url_8,
-    live_url_9,
     created_at,
     updated_at
   ) values (
@@ -251,10 +260,6 @@ begin
     '/agent-stream/3',
     '/agent-stream/4',
     '/agent-stream/5',
-    '/agent-stream/6',
-    '/agent-stream/7',
-    '/agent-stream/8',
-    '/agent-stream/9',
     v_now,
     v_now
   );
@@ -273,15 +278,11 @@ begin
     updated_at,
     last_heartbeat
   ) values
-    (v_mission_id, 1, 'Vibe',   'tiktok',     'Discovery',  'idle', '/agent-stream/1', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 2, 'Pulse',  'tiktok',     'Collection', 'idle', '/agent-stream/2', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 3, 'Rhythm', 'tiktok',     'Analysis',   'idle', '/agent-stream/3', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 4, 'Echo',   'youtube',    'Discovery',  'idle', '/agent-stream/4', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 5, 'Nova',   'youtube',    'Collection', 'idle', '/agent-stream/5', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 6, 'Blaze',  'youtube',    'Analysis',   'idle', '/agent-stream/6', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 7, 'Cipher', 'duckduckgo', 'Discovery',  'idle', '/agent-stream/7', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 8, 'Nexus',  'duckduckgo', 'Collection', 'idle', '/agent-stream/8', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 9, 'Oracle', 'duckduckgo', 'Analysis',   'idle', '/agent-stream/9', mission_prompt, 100, v_now, v_now, v_now);
+    (v_mission_id, 1, 'Echo',   'youtube',         'Shorts Scan',       'idle', '/agent-stream/1', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 2, 'Pulse',  'x',               'Conversation Scan', 'idle', '/agent-stream/2', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 3, 'Thread', 'reddit',          'Community Scan',    'idle', '/agent-stream/3', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 4, 'Ledger', 'substack',        'Narrative Scan',    'idle', '/agent-stream/4', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 5, 'Atlas',  'market_research', 'Market Research',   'idle', '/agent-stream/5', mission_prompt, 100, v_now, v_now, v_now);
 
   insert into public.logs (mission_id, agent_id, type, message, metadata, created_at)
   values (

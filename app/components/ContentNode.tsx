@@ -8,9 +8,10 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { getAgentById, PLATFORM_COLORS } from "../hooks/useAgentData";
 
 function platformFromUrl(url: string) {
-  if (url.includes("tiktok")) return "tiktok";
   if (url.includes("youtube") || url.includes("youtu.be")) return "youtube";
-  if (url.includes("duckduckgo")) return "duckduckgo";
+  if (url.includes("x.com")) return "x";
+  if (url.includes("reddit.com")) return "reddit";
+  if (url.includes("substack.com")) return "substack";
   return "web";
 }
 

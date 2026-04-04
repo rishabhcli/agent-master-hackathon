@@ -6,10 +6,10 @@ import { getAgentMetadataPath } from "../../../../lib/runtime";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { agentId: string } }
 ) {
-  if (!(await hasPreviewAccess())) {
+  if (!(await hasPreviewAccess(request))) {
     return NextResponse.json(
       { error: "unauthorized" },
       {
@@ -22,7 +22,7 @@ export async function GET(
   }
 
   const agentId = Number(params.agentId);
-  if (!Number.isFinite(agentId) || agentId < 1 || agentId > 9) {
+  if (!Number.isFinite(agentId) || agentId < 1 || agentId > 5) {
     return NextResponse.json({ error: "invalid_agent_id" }, { status: 400 });
   }
 

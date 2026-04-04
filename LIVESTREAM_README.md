@@ -22,7 +22,7 @@ runtime/previews/agent-{id}/metadata.json
 - `/agent-stream/1`
 - `/agent-stream/2`
 - ...
-- `/agent-stream/9`
+- `/agent-stream/5`
 
 5. The 3D scene embeds those routes in iframes.
 
@@ -35,10 +35,12 @@ runtime/previews/agent-{id}/metadata.json
 
 ## Profile Expectations
 
-TikTok agents should use local authenticated profiles through:
+Source agents can reuse local browser profiles through:
 
-- `MASTERBUILD_TIKTOK_PROFILE_1`
-- `MASTERBUILD_TIKTOK_PROFILE_2`
-- `MASTERBUILD_TIKTOK_PROFILE_3`
+- `MASTERBUILD_PROFILE_1`
+- `MASTERBUILD_PROFILE_2`
+- `MASTERBUILD_PROFILE_3`
+- `MASTERBUILD_PROFILE_4`
+- `MASTERBUILD_PROFILE_5`
 
 If those values are not set, the worker falls back to repo-local browser profile directories under `runtime/browser/`.
