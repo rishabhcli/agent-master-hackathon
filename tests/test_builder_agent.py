@@ -139,3 +139,26 @@ class TestBuilderInsForgeIntegration:
         # At least some calls should be for builder_outputs
         builder_calls = [c for c in insert_calls if c[0][0] == "builder_outputs"]
         assert len(builder_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_builder_does_not_call_update_mission(self, builder, mock_ai, mock_insforge_client):
+        """Builder should stay scoped to builder_outputs and never overwrite final_options in v1."""
+        mock_ai.generate_chat_completion = AsyncMock(return_value='{"tables": [], "sql": "", "reasoning": "ok"}')
+        mock_insforge_client.update_mission = AsyncMock(return_value=None)
+
+        stop_event = asyncio.Event()
+        await builder.run(stop_event)
+
+        mock_insforge_client.update_mission.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_builder_does_not_update_mission_handoff(self, builder, mock_ai, mock_insforge_client):
+        """Builder containment: the builder should not overwrite mission-level final_options in v1."""
+        mock_ai.generate_chat_completion = AsyncMock(return_value='{"tables": [], "sql": "", "reasoning": "ok"}')
+
+        stop_event = asyncio.Event()
+        await builder.run(stop_event)
+
+        update_calls = mock_insforge_client.update_records.call_args_list
+        mission_calls = [c for c in update_calls if c[0][0] == "missions"]
+        assert mission_calls == []

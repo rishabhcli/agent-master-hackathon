@@ -2,7 +2,8 @@
 
 import { BarChart3, Brain, FileText, MessageSquare } from "lucide-react";
 import { useState } from "react";
-import type { AgentMemoryEntry, AgentSignal, AgentThought, BusinessPlan, LogEntry } from "../hooks/useAgentData";
+import type { AgentData, AgentMemoryEntry, AgentSignal, AgentThought, BusinessPlan, DiscoveredContent, LogEntry } from "../hooks/useAgentData";
+import type { FinalOptionsPayload } from "../hooks/useMasterBuildDashboard";
 import { AgentConversationFeed } from "./AgentConversationFeed";
 import { BusinessPlanEvolution } from "./BusinessPlanEvolution";
 
@@ -14,6 +15,12 @@ interface Props {
   logs: LogEntry[];
   memory: AgentMemoryEntry[];
   businessPlans: BusinessPlan[];
+  agents: AgentData[];
+  discoveries: DiscoveredContent[];
+  missionPrompt: string;
+  finalOptions: FinalOptionsPayload | null;
+  isRunning: boolean;
+  onStopAll: () => void;
 }
 
 const TABS: { key: Tab; label: string; icon: typeof Brain }[] = [
@@ -82,7 +89,7 @@ function MemoryView({ memory }: { memory: AgentMemoryEntry[] }) {
   );
 }
 
-export function ObservabilityDashboard({ thoughts, signals, logs, memory, businessPlans }: Props) {
+export function ObservabilityDashboard({ thoughts, signals, logs, memory, businessPlans, agents, discoveries, missionPrompt, finalOptions, isRunning, onStopAll }: Props) {
   const [tab, setTab] = useState<Tab>("feed");
 
   return (
@@ -127,7 +134,17 @@ export function ObservabilityDashboard({ thoughts, signals, logs, memory, busine
       {/* Content area */}
       <div style={{ flex: 1, overflow: "hidden", paddingTop: 8 }}>
         {tab === "feed" && <AgentConversationFeed thoughts={thoughts} signals={signals} logs={logs} />}
-        {tab === "plan" && <BusinessPlanEvolution plans={businessPlans} />}
+        {tab === "plan" && (
+          <BusinessPlanEvolution
+            plans={businessPlans}
+            agents={agents}
+            discoveries={discoveries}
+            missionPrompt={missionPrompt}
+            finalOptions={finalOptions}
+            isRunning={isRunning}
+            onStopAll={onStopAll}
+          />
+        )}
         {tab === "memory" && <MemoryView memory={memory} />}
       </div>
     </div>

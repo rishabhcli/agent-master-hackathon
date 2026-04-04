@@ -81,8 +81,10 @@ test.describe("MasterBuild mission flow", () => {
     console.log(
       `✅ Step 3: Platform coverage — YouTube: ${platforms.youtube.length}, X: ${platforms.x.length}, Reddit: ${platforms.reddit.length}, Substack: ${platforms.substack.length}`
     );
-    const activePlatforms = Object.values(platforms).filter((agents) => agents.length > 0).length;
-    expect(activePlatforms).toBeGreaterThanOrEqual(3);
+    expect(platforms.youtube.length).toBeGreaterThan(0);
+    expect(platforms.x.length).toBeGreaterThan(0);
+    expect(platforms.reddit.length).toBeGreaterThan(0);
+    expect(platforms.substack.length).toBeGreaterThan(0);
 
     let activeAgents = 0;
     for (let agentId = 1; agentId <= MAX_AGENT_ID; agentId++) {
@@ -122,13 +124,19 @@ test.describe("MasterBuild mission flow", () => {
     if (await sessionWorkspace.isVisible()) {
       console.log("  Waiting for structured market research output (up to 90s)...");
       await expect(page.getByTestId("final-options-modal")).toBeVisible({ timeout: 90_000 });
+      await expect(page.getByTestId("final-implementation-plan")).toBeVisible({ timeout: 10_000 });
       const optionCards = page.locator('[data-testid^="final-option-"]');
       await expect(optionCards).toHaveCount(3, { timeout: 10_000 });
+      await expect(page.locator("text=Primary Winner")).toHaveCount(1);
+      const lovableLaunch = page.getByTestId("lovable-launch");
+      await expect(lovableLaunch).toBeVisible();
+      await expect(lovableLaunch).toHaveAttribute("href", /https:\/\/lovable\.dev\//);
+      await expect(page.getByTestId("lovable-copy-prompt")).toBeVisible();
 
       const evidenceLinks = page.getByTestId("final-options-modal").locator("a[href^='http']");
       const evidenceCount = await evidenceLinks.count();
       expect(evidenceCount).toBeGreaterThanOrEqual(3);
-      console.log(`✅ Step 6: Final options modal rendered with ${evidenceCount} evidence links`);
+      console.log(`✅ Step 6: Final implementation plan rendered with Lovable launch and ${evidenceCount} evidence links`);
     } else {
       console.log("ℹ️ Step 6: Final options UI check skipped because dashboard is auth-gated");
     }

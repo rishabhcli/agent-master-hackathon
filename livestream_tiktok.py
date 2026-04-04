@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import random
+import shutil
 from pathlib import Path
 
 from browser_use import BrowserSession
@@ -55,6 +56,7 @@ def build_local_browser_session(agent_id: int, platform: str, *, headless: bool)
         "--disable-infobars",
         "--no-first-run",
         "--no-default-browser-check",
+        "--no-restore-session-state",
         "--disable-popup-blocking",
         "--lang=en-US",
         "--accept-lang=en-US,en;q=0.9",
@@ -97,4 +99,7 @@ def build_local_browser_session(agent_id: int, platform: str, *, headless: bool)
         chromium_sandbox=False,
         window_size={"width": width, "height": height},
         args=chromium_args,
+        minimum_wait_page_load_time=3.0 if not headless else 1.0,
+        wait_for_network_idle_page_load_time=10.0 if not headless else 8.0,
+        timeout=60000 if not headless else 30000,
     )

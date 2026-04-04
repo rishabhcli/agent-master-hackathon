@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import re
 
@@ -50,6 +50,263 @@ PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
     "reddit": ("reddit.com",),
     "substack": ("substack.com",),
 }
+LOVABLE_REQUIRED_PLATFORMS: tuple[str, ...] = ("youtube", "x", "reddit", "substack")
+LOVABLE_PROMPT_MAX_CHARS = 3500
+GENERIC_DISCOVERY_SUMMARIES = {
+    "",
+    "youtube.com",
+    "x.com",
+    "reddit",
+    "reddit.com",
+    "substack",
+    "substack.com",
+}
+
+
+def is_valid_platform_content_url(platform: str, url: str) -> bool:
+    if not url:
+        return False
+
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "/").rstrip("/") or "/"
+
+    if not host:
+        return False
+
+    if platform == "youtube":
+        if "youtube.com" in host:
+            return path == "/watch" or path.startswith("/shorts/") or path.startswith("/post/")
+        if "youtu.be" in host:
+            return path not in {"", "/"}
+        return False
+
+    if platform == "x":
+        if "x.com" not in host:
+            return False
+        return "/status/" in path
+
+    if platform == "reddit":
+        if "reddit.com" not in host:
+            return False
+        return "/comments/" in path
+
+    if platform == "substack":
+        if "substack.com" not in host:
+            return False
+        if host.endswith(".substack.com"):
+            blocked_paths = {"/", "/search", "/archive", "/publish"}
+            return path not in blocked_paths and not path.startswith("/search") and not path.startswith("/publish")
+        return path.startswith("/p/")
+
+    return False
+
+
+def normalize_discovery_record(record: dict[str, Any]) -> dict[str, str]:
+    return {
+        "id": str(record.get("id", "")).strip(),
+        "platform": str(record.get("platform", "")).strip(),
+        "title": str(record.get("title", "")).strip(),
+        "keywords": str(record.get("keywords", "")).strip(),
+        "summary": str(record.get("summary", "")).strip(),
+        "source_url": str(record.get("source_url", record.get("url", ""))).strip(),
+    }
+
+
+def is_valid_discovery_record(record: dict[str, Any]) -> bool:
+    normalized = normalize_discovery_record(record)
+    platform = normalized["platform"]
+    url = normalized["source_url"]
+    summary = normalized["summary"].lower()
+    title = normalized["title"].lower()
+    if summary in GENERIC_DISCOVERY_SUMMARIES or title in GENERIC_DISCOVERY_SUMMARIES:
+        return False
+    return bool(platform and summary and is_valid_platform_content_url(platform, url))
+
+
+def filter_valid_discoveries(discoveries: list[dict[str, Any]]) -> list[dict[str, str]]:
+    vetted: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for record in discoveries:
+        if not is_valid_discovery_record(record):
+            continue
+        normalized = normalize_discovery_record(record)
+        if normalized["source_url"] in seen_urls:
+            continue
+        seen_urls.add(normalized["source_url"])
+        vetted.append(normalized)
+    return vetted
+
+
+def discovery_to_evidence(record: dict[str, Any]) -> dict[str, str]:
+    normalized = normalize_discovery_record(record)
+    return {
+        "id": normalized["id"],
+        "platform": normalized["platform"],
+        "title": normalized["title"],
+        "keywords": normalized["keywords"],
+        "summary": normalized["summary"],
+        "url": normalized["source_url"],
+    }
+
+
+def build_platform_coverage(discoveries: list[dict[str, Any]]) -> dict[str, Any]:
+    completed = sorted(
+        {
+            str(item.get("platform", "")).strip()
+            for item in discoveries
+            if is_valid_discovery_record(item)
+        }
+        & set(LOVABLE_REQUIRED_PLATFORMS)
+    )
+    missing = [platform for platform in LOVABLE_REQUIRED_PLATFORMS if platform not in completed]
+    return {
+        "requiredPlatforms": list(LOVABLE_REQUIRED_PLATFORMS),
+        "completedPlatforms": completed,
+        "missingPlatforms": missing,
+        "readyForLovable": not missing,
+    }
+
+
+def build_lovable_launch_url(prompt: str) -> str:
+    compact_prompt = " ".join((prompt or "").split())[:LOVABLE_PROMPT_MAX_CHARS].strip()
+    return f"https://lovable.dev/?autosubmit=true#prompt={quote(compact_prompt, safe='')}" if compact_prompt else ""
+
+
+def _clean_string_list(value: Any, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text:
+            cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def _normalize_plan_items(
+    value: Any,
+    *,
+    keys: tuple[str, ...],
+    list_keys: tuple[str, ...] = (),
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for raw_item in value[:limit]:
+        if not isinstance(raw_item, dict):
+            continue
+        normalized: dict[str, Any] = {}
+        for key in keys:
+            field = raw_item.get(key)
+            if key in list_keys:
+                values = field if isinstance(field, list) else [field]
+                normalized[key] = _clean_string_list(values, limit=6)
+            elif isinstance(field, list):
+                normalized[key] = _clean_string_list(field, limit=6)
+            else:
+                normalized[key] = str(field or "").strip()
+        if any(normalized.values()):
+            items.append(normalized)
+    return items
+
+
+def _dedupe_evidence_items(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for item in items:
+        url = str(item.get("url", "")).strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        deduped.append(item)
+    return deduped
+
+
+def select_primary_option(options: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not options:
+        return None
+
+    def score(option: dict[str, Any]) -> tuple[int, int, int, str]:
+        evidence = option.get("evidence", [])
+        if not isinstance(evidence, list):
+            evidence = []
+        platforms = {str(item.get("platform", "")).strip() for item in evidence if str(item.get("platform", "")).strip()}
+        concept = str(option.get("concept", "")).strip()
+        return (len(platforms), len(evidence), len(concept), str(option.get("id", "")))
+
+    return max(options, key=score)
+
+
+def build_plan_source_evidence(
+    primary_option: dict[str, Any] | None,
+    discoveries: list[dict[str, Any]],
+    completed_platforms: list[str],
+) -> list[dict[str, str]]:
+    evidence: list[dict[str, str]] = []
+    if primary_option and isinstance(primary_option.get("evidence"), list):
+        for item in primary_option["evidence"]:
+            evidence.append(
+                {
+                    "id": str(item.get("id", "")).strip(),
+                    "platform": str(item.get("platform", "")).strip(),
+                    "title": str(item.get("title", "")).strip(),
+                    "keywords": str(item.get("keywords", "")).strip(),
+                    "summary": str(item.get("summary", "")).strip(),
+                    "url": str(item.get("url", "")).strip(),
+                }
+            )
+
+    discoveries_by_platform: dict[str, list[dict[str, Any]]] = {platform: [] for platform in completed_platforms}
+    for discovery in discoveries:
+        platform = str(discovery.get("platform", "")).strip()
+        if platform in discoveries_by_platform:
+            discoveries_by_platform[platform].append(discovery)
+
+    present_platforms = {str(item.get("platform", "")).strip() for item in evidence}
+    for platform in completed_platforms:
+        if platform in present_platforms:
+            continue
+        candidates = discoveries_by_platform.get(platform, [])
+        if candidates:
+            evidence.append(discovery_to_evidence(candidates[0]))
+
+    return _dedupe_evidence_items(evidence)
+
+
+def build_lovable_prompt_from_plan(plan: dict[str, Any]) -> str:
+    title = str(plan.get("title", "Validated MVP")).strip()
+    one_liner = str(plan.get("oneLiner", "")).strip()
+    target_users = str(plan.get("targetUsers", "")).strip()
+    value_prop = str(plan.get("valueProp", "")).strip()
+    flows = _clean_string_list(plan.get("coreUserFlows"), limit=4)
+    screens = [
+        str(screen.get("name", "")).strip()
+        for screen in plan.get("screens", [])[:5]
+        if isinstance(screen, dict) and str(screen.get("name", "")).strip()
+    ]
+    entities = [
+        str(entity.get("entity", "")).strip()
+        for entity in plan.get("dataModel", [])[:5]
+        if isinstance(entity, dict) and str(entity.get("entity", "")).strip()
+    ]
+    monetization = str(plan.get("monetization", "")).strip()
+
+    parts = [
+        f"Build an MVP web app called {title}.",
+        one_liner,
+        f"Target users: {target_users}." if target_users else "",
+        f"Value proposition: {value_prop}." if value_prop else "",
+        f"Primary user flows: {', '.join(flows)}." if flows else "",
+        f"Required screens: {', '.join(screens)}." if screens else "",
+        f"Key data entities: {', '.join(entities)}." if entities else "",
+        f"Monetization: {monetization}." if monetization else "",
+        "Keep scope MVP-only and make the product immediately usable.",
+    ]
+    return " ".join(part for part in parts if part).strip()
 
 
 def utc_now() -> str:
@@ -320,6 +577,25 @@ class InsForgeRuntimeClient:
                 }
             ],
         )
+
+    async def execute_sql(self, sql: str) -> None:
+        """Execute raw SQL on InsForge (for schema creation)."""
+        try:
+            await self._request("POST", "/api/database/sql", json={"query": sql})
+        except Exception as e:
+            print(f"[insforge] SQL execution error: {e}")
+            raise
+
+    async def get_all_discovered_urls(self, mission_id: str) -> set[str]:
+        """Get all URLs already discovered by ANY agent in this mission (cross-agent dedup)."""
+        try:
+            records = await self.list_records(
+                "discoveries",
+                params={"mission_id": f"eq.{mission_id}", "select": "source_url", "limit": 500},
+            )
+            return {str(r.get("source_url", "")) for r in records if r.get("source_url")}
+        except Exception:
+            return set()
 
     async def append_discovery(
         self,
@@ -771,6 +1047,93 @@ class MasterBuildAI:
             "options": fallback_options,
         }
 
+    async def generate_finalized_implementation_plan(
+        self,
+        original_prompt: str,
+        winning_option: dict[str, Any],
+        discoveries: list[dict[str, str]],
+        business_plan: str,
+    ) -> dict[str, Any]:
+        system_prompt = (
+            "You are a product architect turning market research into a build-ready implementation plan. "
+            "The final output will be shown directly in the app and used to launch Lovable. "
+            "Return ONLY JSON with keys title, one_liner, problem, target_users, value_prop, why_now, "
+            "core_user_flows, screens, data_model, workflows, integrations, monetization, launch_plan, "
+            "success_metrics, and lovable_prompt. "
+            "core_user_flows, integrations, launch_plan, and success_metrics must be arrays of short strings. "
+            "screens must be an array of {name, purpose, modules}. "
+            "data_model must be an array of {entity, purpose, fields}. "
+            "workflows must be an array of {name, trigger, outcome}. "
+            "Make the plan specific enough for an app builder to implement immediately. "
+            "Keep lovable_prompt concise and focused on MVP scope."
+        )
+        discovery_lines = []
+        for item in discoveries[:12]:
+            discovery_lines.append(
+                f"- {item.get('platform', '?')} | {item.get('title', '')} | "
+                f"{item.get('keywords', '')} | {item.get('summary', '')} | {item.get('source_url', '')}"
+            )
+        user_prompt = (
+            f"ORIGINAL IDEA:\n{original_prompt}\n\n"
+            f"WINNING OPTION:\n{json.dumps(winning_option, indent=2)[:1800]}\n\n"
+            f"BUSINESS PLAN:\n{business_plan[:1800]}\n\n"
+            f"SUPPORTING DISCOVERIES:\n{chr(10).join(discovery_lines) or '(none)'}\n\n"
+            "Generate one finalized implementation plan and a concise Lovable prompt."
+        )
+
+        try:
+            parsed = extract_json_block(
+                await self.generate_chat_completion(
+                    system_prompt,
+                    user_prompt,
+                    max_tokens=2200,
+                    thought_type="refinement",
+                    action_label="finalized_implementation_plan",
+                )
+            )
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+        option_title = str(winning_option.get("title", "")).strip() or original_prompt
+        option_concept = str(winning_option.get("concept", "")).strip() or original_prompt
+        option_audience = str(winning_option.get("audience", "")).strip() or "Users validated by cross-platform research"
+        return {
+            "title": option_title,
+            "one_liner": option_concept,
+            "problem": str(winning_option.get("whyPromising", "")).strip() or "Users repeatedly surfaced this need across social research.",
+            "target_users": option_audience,
+            "value_prop": str(winning_option.get("marketAngle", "")).strip() or "Deliver a focused MVP grounded in validated demand signals.",
+            "why_now": "Cross-platform conversations show active demand and clear unmet expectations.",
+            "core_user_flows": [
+                "Sign up and onboard by use case",
+                "Create the primary project or workspace",
+                "Complete the core task with guided automation",
+                "Review results and share or export outcomes",
+            ],
+            "screens": [
+                {"name": "Landing", "purpose": "Explain the value proposition and capture signups", "modules": ["Hero", "Proof", "CTA"]},
+                {"name": "Dashboard", "purpose": "Summarize active work and next actions", "modules": ["Overview", "Activity feed", "Quick actions"]},
+                {"name": "Core workflow", "purpose": "Handle the product's main task flow", "modules": ["Input form", "Execution state", "Results"]},
+            ],
+            "data_model": [
+                {"entity": "users", "purpose": "Account ownership and preferences", "fields": ["email", "name", "plan"]},
+                {"entity": "projects", "purpose": "Primary unit of work", "fields": ["title", "status", "owner_id"]},
+                {"entity": "artifacts", "purpose": "Store workflow outputs", "fields": ["project_id", "type", "content"]},
+            ],
+            "workflows": [
+                {"name": "Onboarding", "trigger": "New account", "outcome": "Configured workspace"},
+                {"name": "Core execution", "trigger": "User starts a task", "outcome": "Task result is generated"},
+                {"name": "Share results", "trigger": "User completes workflow", "outcome": "Artifact is shared or exported"},
+            ],
+            "integrations": ["Email notifications", "Analytics", "Payment processing"],
+            "monetization": "Offer a free trial with premium limits unlocked on paid plans.",
+            "launch_plan": ["Ship MVP", "Invite pilot users", "Measure activation", "Iterate on retention"],
+            "success_metrics": ["Activation rate", "Weekly retained users", "Workflow completion rate"],
+            "lovable_prompt": option_concept,
+        }
+
     # ── LLM-driven action planner ────────────────────────────────────
     async def plan_agent_action(self, agent_id: int, platform: str, current_url: str, page_title: str, page_text: str = "") -> dict[str, Any]:
         ctx = agent_context.build_agent_prompt_context(agent_id)
@@ -820,14 +1183,14 @@ class MasterBuildAI:
             "You read all agents' journals, discoveries, and the current strategy. "
             "Write an UPDATED strategy.md that tells each agent what to focus on next.\n\n"
             "Be specific: mention agent numbers, assign different angles, note which "
-            "leads are promising, and which source agents should pivot. Agent 5 is market research, not a browser. "
-            "Keep it under 300 words.\n\n"
-            "Format as markdown. Start with '# Strategy' and a phase name."
+            "leads are promising, and which source agents should pivot. Agent 5 is market research, not a browser.\n\n"
+            "CRITICAL: Keep it under 150 words. Use bullet points, not paragraphs. "
+            "No thinking tags. Format as markdown. Start with '# Strategy' and a phase name."
         )
-        user_prompt = f"FULL CONTEXT:\n{ctx}\n\nWrite the updated strategy.md."
+        user_prompt = f"FULL CONTEXT:\n{ctx}\n\nWrite the updated strategy.md. Be extremely concise."
         try:
             result = await self.generate_chat_completion(
-                system_prompt, user_prompt, max_tokens=800,
+                system_prompt, user_prompt, max_tokens=500,
                 thought_type="strategy", action_label="coordinate_strategy",
             )
             if result and "strategy" in result.lower():
@@ -851,14 +1214,16 @@ class MasterBuildAI:
             "You will receive the original idea, discoveries from research agents browsing "
             "YouTube, X/Twitter, Reddit, and Substack, plus the current business plan draft.\n\n"
             "Return ONLY a JSON object with these keys:\n"
-            '  "market_opportunity": string — market size, demand signals, growth potential\n'
-            '  "competitive_landscape": string — existing solutions, gaps, differentiation angles\n'
-            '  "revenue_models": string — monetization strategies, pricing approaches, revenue streams\n'
-            '  "user_acquisition": string — growth channels, audience segments, go-to-market strategy\n'
-            '  "risk_analysis": string — key risks, moats, mitigation strategies\n'
-            '  "confidence_score": integer 0-100 — how confident based on evidence strength\n'
-            '  "executive_summary": string — 2-3 sentence overview of the refined business idea\n'
-            '  "recommended_next_steps": array of strings — 3-5 concrete next actions\n'
+            '  "market_opportunity": string (MAX 2 sentences) — market size, demand signals\n'
+            '  "competitive_landscape": string (MAX 2 sentences) — gaps and differentiation\n'
+            '  "revenue_models": string (MAX 2 sentences) — monetization and pricing\n'
+            '  "user_acquisition": string (MAX 2 sentences) — growth channels, go-to-market\n'
+            '  "risk_analysis": string (MAX 2 sentences) — key risks and moats\n'
+            '  "confidence_score": integer 0-100 — evidence-based confidence\n'
+            '  "executive_summary": string (MAX 2 sentences) — overview of refined idea\n'
+            '  "recommended_next_steps": array of 3-5 SHORT action items (max 8 words each)\n\n'
+            "CRITICAL: Be extremely concise. Each string field must be under 150 characters. "
+            "No long paragraphs. No thinking tags. Just the JSON.\n"
         )
         discovery_lines = []
         for item in discoveries[:30]:
@@ -878,7 +1243,7 @@ class MasterBuildAI:
         try:
             parsed = extract_json_block(
                 await self.generate_chat_completion(
-                    system_prompt, user_prompt, max_tokens=2000,
+                    system_prompt, user_prompt, max_tokens=800,
                     thought_type="refinement", action_label=f"business_plan_{'final' if is_final else 'update'}",
                 )
             )
@@ -919,7 +1284,8 @@ class MasterBuildOrchestrator:
         self.navigation_wait = float(os.getenv("MASTERBUILD_NAVIGATION_WAIT", "2"))
         # OpenAI config for browser-use navigation on action-heavy platforms
         self._openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self._openai_browser_model = os.getenv("OPENAI_BROWSER_MODEL", "gpt-4o-mini")
+        self._openai_browser_model = os.getenv("OPENAI_BROWSER_MODEL", "gpt-4o")
+        self._openai_mini_model = "gpt-4o-mini"
         self._openai_available = bool(self._openai_api_key)
 
     def _create_minimax_llm(self):
@@ -984,31 +1350,45 @@ class MasterBuildOrchestrator:
             max_completion_tokens=4096,
         )
 
+    def _create_openai_llm_with_model(self, model: str):
+        """Create a browser-use ChatOpenAI with a specific OpenAI model."""
+        from browser_use.llm.openai.chat import ChatOpenAI as _ChatOpenAI
+        return _ChatOpenAI(
+            model=model,
+            api_key=self._openai_api_key,
+            base_url="https://api.openai.com/v1",
+            temperature=0.2,
+            max_completion_tokens=4096,
+        )
+
     def _create_llm_for_platform(self, platform: str):
         """Select the best browser-use LLM for the given platform.
 
         Routing logic:
-        - youtube, x  → GPT-4o-mini (reliable structured output, fast actions)
+        - youtube → GPT-4o (full model — YouTube's heavy DOM needs strong reasoning)
+        - x → GPT-4o-mini (fast structured output for tweet navigation)
         - reddit, substack → MiniMax M2.7 (deeper reasoning over long-form text)
 
         Falls back to MiniMax if OPENAI_API_KEY is not configured.
         """
-        use_openai = (
-            platform in self.OPENAI_PLATFORMS
-            and self._openai_available
-        )
-
-        if use_openai:
-            model_label = f"OpenAI {self._openai_browser_model}"
-            print(f"[llm-router] Platform '{platform}' → {model_label}")
-            return self._create_openai_llm(), model_label
-        else:
+        if not self._openai_available and platform in self.OPENAI_PLATFORMS:
             model_label = f"MiniMax {self.ai.model}"
-            if platform in self.OPENAI_PLATFORMS and not self._openai_available:
-                print(f"[llm-router] Platform '{platform}' prefers OpenAI but OPENAI_API_KEY missing → falling back to {model_label}")
-            else:
-                print(f"[llm-router] Platform '{platform}' → {model_label}")
+            print(f"[llm-router] Platform '{platform}' prefers OpenAI but OPENAI_API_KEY missing → falling back to {model_label}")
             return self._create_minimax_llm(), model_label
+
+        if platform == "youtube" and self._openai_available:
+            model_label = f"OpenAI {self._openai_browser_model}"
+            print(f"[llm-router] Platform 'youtube' → {model_label} (full model for heavy DOM)")
+            return self._create_openai_llm_with_model(self._openai_browser_model), model_label
+
+        if platform == "x" and self._openai_available:
+            model_label = f"OpenAI {self._openai_mini_model}"
+            print(f"[llm-router] Platform 'x' → {model_label}")
+            return self._create_openai_llm_with_model(self._openai_mini_model), model_label
+
+        model_label = f"MiniMax {self.ai.model}"
+        print(f"[llm-router] Platform '{platform}' → {model_label}")
+        return self._create_minimax_llm(), model_label
 
     async def verify_llm(self) -> bool:
         """Health-check LLMs before starting a mission."""
@@ -1120,6 +1500,7 @@ class MasterBuildOrchestrator:
 
         tasks = []
         market_research_spec: AgentSpec | None = None
+        browser_agent_index = 0
         for spec in AGENT_SPECS:
             if spec.platform == "market_research":
                 market_research_spec = spec
@@ -1134,9 +1515,13 @@ class MasterBuildOrchestrator:
                 )
                 continue
 
+            # Stagger browser launches by 12s each to avoid Chromium startup contention in non-headless mode
+            stagger_delay = browser_agent_index * 12
+            browser_agent_index += 1
             tasks.append(
                 asyncio.create_task(
-                    self.run_agent(
+                    self._staggered_run_agent(
+                        stagger_delay,
                         spec,
                         mission_id=mission_id,
                         mission_prompt=prompt,
@@ -1199,13 +1584,13 @@ class MasterBuildOrchestrator:
                     agent_context.update_business_plan(plan_md)
                     await self.client.append_business_plan(
                         mission_id, version=999,
-                        market_opportunity=str(final_plan.get("market_opportunity", ""))[:2000],
-                        competitive_landscape=str(final_plan.get("competitive_landscape", ""))[:2000],
-                        revenue_models=str(final_plan.get("revenue_models", ""))[:2000],
-                        user_acquisition=str(final_plan.get("user_acquisition", ""))[:2000],
-                        risk_analysis=str(final_plan.get("risk_analysis", ""))[:2000],
+                        market_opportunity=str(final_plan.get("market_opportunity", ""))[:500],
+                        competitive_landscape=str(final_plan.get("competitive_landscape", ""))[:500],
+                        revenue_models=str(final_plan.get("revenue_models", ""))[:500],
+                        user_acquisition=str(final_plan.get("user_acquisition", ""))[:500],
+                        risk_analysis=str(final_plan.get("risk_analysis", ""))[:500],
                         confidence_score=int(final_plan.get("confidence_score", 0)),
-                        discovery_count=len(discoveries), is_final=True, raw_plan=plan_md[:5000],
+                        discovery_count=len(discoveries), is_final=True, raw_plan=plan_md[:2000],
                     )
                     await self.client.append_log(
                         mission_id, agent_id=None, log_type="status",
@@ -1320,15 +1705,15 @@ class MasterBuildOrchestrator:
                     await self.client.append_business_plan(
                         mission_id,
                         version=plan_version,
-                        market_opportunity=str(plan_data.get("market_opportunity", ""))[:2000],
-                        competitive_landscape=str(plan_data.get("competitive_landscape", ""))[:2000],
-                        revenue_models=str(plan_data.get("revenue_models", ""))[:2000],
-                        user_acquisition=str(plan_data.get("user_acquisition", ""))[:2000],
-                        risk_analysis=str(plan_data.get("risk_analysis", ""))[:2000],
+                        market_opportunity=str(plan_data.get("market_opportunity", ""))[:500],
+                        competitive_landscape=str(plan_data.get("competitive_landscape", ""))[:500],
+                        revenue_models=str(plan_data.get("revenue_models", ""))[:500],
+                        user_acquisition=str(plan_data.get("user_acquisition", ""))[:500],
+                        risk_analysis=str(plan_data.get("risk_analysis", ""))[:500],
                         confidence_score=int(plan_data.get("confidence_score", 0)),
                         discovery_count=new_count,
                         is_final=False,
-                        raw_plan=plan_md[:5000],
+                        raw_plan=plan_md[:2000],
                     )
 
                     await self.client.append_log(
@@ -1346,7 +1731,12 @@ class MasterBuildOrchestrator:
             await asyncio.sleep(30)
 
     async def monitor_builder_trigger(self, mission_id: str, prompt: str) -> None:
-        """Watch business plan confidence and launch the builder agent when ready."""
+        """Watch business plan confidence and launch the builder agent when ready.
+
+        The builder runs a refinement loop internally (build → evaluate → refine).
+        After builder finishes, if still below proficiency target and agents are running,
+        we signal them to research the gaps and re-trigger the builder.
+        """
         builder_launched = False
         confidence_threshold = 40
         await asyncio.sleep(60)  # Let research agents and plan synthesis warm up
@@ -1366,11 +1756,18 @@ class MasterBuildOrchestrator:
                         builder_launched = True
                         await self.client.append_log(
                             mission_id, agent_id=None, log_type="status",
-                            message=f"🚀 Business plan confidence {confidence}% >= {confidence_threshold}% — launching Builder Agent",
+                            message=f"🚀 Business plan confidence {confidence}% >= {confidence_threshold}% — launching Builder Agent (with refinement loop)",
                             metadata={"confidence": confidence},
                         )
                         builder = BuilderAgent(self.ai, self.client, mission_id, prompt)
-                        await builder.run(self.stop_event)
+                        result = await builder.run(self.stop_event)
+                        # Log final builder result
+                        proficiency = result.get("proficiency_eval", {}).get("score", 0) if isinstance(result, dict) else 0
+                        await self.client.append_log(
+                            mission_id, agent_id=None, log_type="status",
+                            message=f"🏁 Builder finished — proficiency {proficiency}%",
+                            metadata={"proficiency": proficiency},
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -1380,6 +1777,36 @@ class MasterBuildOrchestrator:
 
     def _discovery_signature(self, discoveries: list[dict[str, Any]]) -> str:
         return "|".join(str(item.get("id", "")) for item in discoveries[:16])
+
+    def _normalize_implementation_plan(
+        self,
+        raw_plan: dict[str, Any],
+        *,
+        fallback_title: str,
+        fallback_one_liner: str,
+        evidence: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        title = str(raw_plan.get("title", "")).strip() or fallback_title
+        one_liner = str(raw_plan.get("one_liner", "")).strip() or fallback_one_liner
+
+        return {
+            "generatedBy": "MiniMax-M2.7",
+            "title": title,
+            "oneLiner": one_liner,
+            "problem": str(raw_plan.get("problem", "")).strip() or "Validated demand surfaced from the four target platforms.",
+            "targetUsers": str(raw_plan.get("target_users", "")).strip() or "Users identified in the winning research option.",
+            "valueProp": str(raw_plan.get("value_prop", "")).strip() or "Deliver the most urgent user outcome with a focused MVP.",
+            "whyNow": str(raw_plan.get("why_now", "")).strip() or "Current social signals show sustained urgency and clear product gaps.",
+            "coreUserFlows": _clean_string_list(raw_plan.get("core_user_flows"), limit=6),
+            "screens": _normalize_plan_items(raw_plan.get("screens"), keys=("name", "purpose", "modules"), list_keys=("modules",), limit=6),
+            "dataModel": _normalize_plan_items(raw_plan.get("data_model"), keys=("entity", "purpose", "fields"), list_keys=("fields",), limit=6),
+            "workflows": _normalize_plan_items(raw_plan.get("workflows"), keys=("name", "trigger", "outcome"), limit=6),
+            "integrations": _clean_string_list(raw_plan.get("integrations"), limit=6),
+            "monetization": str(raw_plan.get("monetization", "")).strip() or "Monetize through a focused subscription or usage-based offering.",
+            "launchPlan": _clean_string_list(raw_plan.get("launch_plan"), limit=6),
+            "successMetrics": _clean_string_list(raw_plan.get("success_metrics"), limit=6),
+            "sourceEvidence": evidence,
+        }
 
     async def _build_final_options_payload(
         self,
@@ -1399,10 +1826,13 @@ class MasterBuildOrchestrator:
             }
             for item in discoveries
         ]
-        report = await self.ai.generate_market_research_report(prompt, discovery_dicts)
+        valid_discoveries = filter_valid_discoveries(discovery_dicts)
+        coverage = build_platform_coverage(valid_discoveries)
+
+        report = await self.ai.generate_market_research_report(prompt, valid_discoveries or discovery_dicts)
         discovery_map = {
             str(item.get("id", "")): item
-            for item in discovery_dicts
+            for item in (valid_discoveries or discovery_dicts)
             if str(item.get("id", "")).strip()
         }
 
@@ -1437,8 +1867,9 @@ class MasterBuildOrchestrator:
                         }
                     )
 
-            if not evidence and discovery_dicts:
-                fallback_item = discovery_dicts[index % len(discovery_dicts)]
+            if not evidence and (valid_discoveries or discovery_dicts):
+                fallback_source = valid_discoveries or discovery_dicts
+                fallback_item = fallback_source[index % len(fallback_source)]
                 evidence.append(
                     {
                         "id": fallback_item.get("id", ""),
@@ -1464,7 +1895,8 @@ class MasterBuildOrchestrator:
             )
 
         while len(options) < 3:
-            fallback_item = discovery_dicts[len(options) % len(discovery_dicts)] if discovery_dicts else None
+            fallback_source = valid_discoveries or discovery_dicts
+            fallback_item = fallback_source[len(options) % len(fallback_source)] if fallback_source else None
             options.append(
                 {
                     "id": f"option-{len(options) + 1}",
@@ -1490,8 +1922,45 @@ class MasterBuildOrchestrator:
         raw_signals = report.get("key_signals", [])
         signals = [str(item).strip() for item in raw_signals if str(item).strip()] if isinstance(raw_signals, list) else []
         summary = str(report.get("market_research_summary", "")).strip() or (
-            f"Generated market research from {len(discoveries)} platform discoveries."
+            f"Generated market research from {len(valid_discoveries or discovery_dicts)} platform discoveries."
         )
+        primary_option = select_primary_option(options) or {
+            "id": "option-1",
+            "title": prompt,
+            "concept": prompt,
+            "audience": "Users surfaced from current research",
+            "whyPromising": summary,
+            "marketAngle": summary,
+            "recommendedFormat": "Focused MVP",
+            "evidence": [],
+        }
+        final_evidence = build_plan_source_evidence(
+            primary_option,
+            valid_discoveries,
+            coverage["completedPlatforms"],
+        )
+        business_plan = agent_context.get_business_plan()
+        raw_plan = await self.ai.generate_finalized_implementation_plan(
+            prompt,
+            primary_option,
+            valid_discoveries,
+            business_plan,
+        )
+        implementation_plan = self._normalize_implementation_plan(
+            raw_plan if isinstance(raw_plan, dict) else {},
+            fallback_title=primary_option["title"],
+            fallback_one_liner=primary_option["concept"],
+            evidence=final_evidence,
+        )
+        lovable_prompt = str((raw_plan or {}).get("lovable_prompt", "")).strip() if isinstance(raw_plan, dict) else ""
+        if not lovable_prompt:
+            lovable_prompt = build_lovable_prompt_from_plan(implementation_plan)
+        lovable_handoff = {
+            "title": implementation_plan["title"],
+            "prompt": lovable_prompt[:LOVABLE_PROMPT_MAX_CHARS],
+            "launchUrl": build_lovable_launch_url(lovable_prompt),
+            "evidence": final_evidence,
+        }
 
         return {
             "generatedAt": utc_now(),
@@ -1501,6 +1970,10 @@ class MasterBuildOrchestrator:
                 "signals": signals[:6],
             },
             "options": options[:3],
+            "primaryOptionId": primary_option["id"],
+            "coverage": coverage,
+            "implementationPlan": implementation_plan,
+            "lovableHandoff": lovable_handoff,
         }
 
     async def _update_market_research_output(
@@ -1525,9 +1998,13 @@ class MasterBuildOrchestrator:
         await self.preview_manager.publish(
             spec.agent_id,
             status="found_trend" if is_final else "searching",
-            title="Market research ready" if is_final else "Refreshing market research",
+            title="Lovable handoff ready" if payload["coverage"]["readyForLovable"] else "Refreshing market research",
             current_url="",
-            note=f"{len(payload['options'])} options from {len(discoveries)} discoveries",
+            note=(
+                f"{len(payload['options'])} options, winner: {payload['implementationPlan']['title']}"
+                if payload["coverage"]["readyForLovable"]
+                else f"Waiting on platforms: {', '.join(payload['coverage']['missingPlatforms'])}"
+            ),
             screenshot_path=None,
         )
         await self.client.update_agent(
@@ -1554,7 +2031,11 @@ class MasterBuildOrchestrator:
             mission_id,
             agent_id=spec.agent_id,
             log_type="final_options",
-            message=f"Generated {len(payload['options'])} market-backed options.",
+            message=(
+                f"Generated finalized implementation plan for {payload['implementationPlan']['title']}."
+                if payload["coverage"]["readyForLovable"]
+                else f"Generated {len(payload['options'])} market-backed options; waiting for full platform coverage."
+            ),
             metadata=payload,
         )
         return payload
@@ -1595,8 +2076,10 @@ class MasterBuildOrchestrator:
 
             while not self.stop_event.is_set():
                 discoveries = await self.client.get_recent_discoveries(24)
-                if len(discoveries) >= 4:
-                    signature = self._discovery_signature(discoveries)
+                valid_discoveries = filter_valid_discoveries(discoveries)
+                coverage = build_platform_coverage(valid_discoveries)
+                if coverage["readyForLovable"]:
+                    signature = self._discovery_signature(valid_discoveries)
                     if signature != last_signature:
                         await self._update_market_research_output(
                             mission_id,
@@ -1611,7 +2094,10 @@ class MasterBuildOrchestrator:
                         status="searching",
                         title="Waiting for discoveries",
                         current_url="",
-                        note=f"Collected {len(discoveries)}/4 discoveries needed to start market research.",
+                        note=(
+                            f"Validated platforms: {len(coverage['completedPlatforms'])}/{len(LOVABLE_REQUIRED_PLATFORMS)}. "
+                            f"Missing: {', '.join(coverage['missingPlatforms']) or 'none'}."
+                        ),
                         screenshot_path=None,
                     )
                     await self.client.update_agent(
@@ -1804,25 +2290,39 @@ class MasterBuildOrchestrator:
         # Platform-specific deep-navigation instructions + direct search URLs
         platform_instructions: dict[str, dict[str, str]] = {
             "youtube": {
-                "search_url": f"https://www.youtube.com/results?search_query={seed_queries[0].replace(' ', '+') if seed_queries else 'trending'}&sp=EgIYAQ%253D%253D",
+                "search_url": f"https://www.youtube.com/results?search_query={seed_queries[0].replace(' ', '+') if seed_queries else 'trending'}",
                 "guide": (
-                    "You are researching YouTube for business insights.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above.\n"
-                    "2. Click the first 5–8 video thumbnails from search results — open each video.\n"
-                    "3. On EVERY video page: read the FULL title, scroll down to see the description, "
-                    "   view count, like count, and channel subscriber count. Scroll further to read the top 5 comments.\n"
-                    "4. After reading a video, press Back and click the next result.\n"
-                    "5. After covering the first query, search for the SECOND seed query.\n\n"
-                    "WHAT TO EXTRACT from each video:\n"
-                    "- Exact view count and like count (signals market demand)\n"
-                    "- Channel name + subscriber count (signals creator monetisation tier)\n"
-                    "- Description text (often contains affiliate links, product mentions, pricing)\n"
-                    "- Top comments — especially complaints, questions, 'I wish' statements\n"
-                    "- Whether the creator has merch / memberships / sponsorship mentions\n\n"
-                    "BOT EVASION: If you see a sign-in prompt or bot check, scroll down first — "
-                    "many elements load without needing login. If a CAPTCHA appears, wait 3 seconds for auto-solve. "
-                    "Never sign in — work with what's publicly visible."
+                    "You are a business researcher browsing YouTube like a real person would.\n\n"
+                    "STEP-BY-STEP ACTIONS (follow this exactly):\n\n"
+                    "PHASE 1 — SEARCH & SCAN:\n"
+                    "1. You will land on a YouTube search results page. Wait for it to fully load.\n"
+                    "2. Scroll down SLOWLY 2-3 times to see more results. Read all the video titles visible.\n"
+                    "3. Pick the MOST RELEVANT video to the business mission — click its thumbnail or title.\n\n"
+                    "PHASE 2 — DEEP DIVE (repeat for 5-8 videos):\n"
+                    "4. On the video page: scroll down to see the description box. Click 'Show more' if visible.\n"
+                    "5. Read the FULL video title, view count, like count, and upload date.\n"
+                    "6. Read the description — look for: pricing, product links, affiliate links, business models.\n"
+                    "7. Scroll to the comments section. Read the top 5-8 comments. Look for:\n"
+                    "   - Complaints ('this doesn't work', 'too expensive', 'I wish...')\n"
+                    "   - Questions ('how do I...', 'where can I...')\n"
+                    "   - Success stories ('I made $X doing this')\n"
+                    "8. Click the channel name to see subscriber count. Then press Back.\n"
+                    "9. Click the NEXT relevant video from search results.\n\n"
+                    "PHASE 3 — SECOND QUERY:\n"
+                    "10. After 3-4 videos, click the YouTube search bar, clear it, type the SECOND seed query, press Enter.\n"
+                    "11. Repeat Phase 2 for 3-4 more videos.\n\n"
+                    "WHAT TO EXTRACT (be specific — exact numbers):\n"
+                    "- View count (e.g. '1.2M views') and like count\n"
+                    "- Channel subscriber count (e.g. '450K subscribers')\n"
+                    "- Revenue/pricing mentioned in description or video\n"
+                    "- Top pain points from comments (quote them verbatim)\n"
+                    "- Business model insights (how creators monetize this niche)\n\n"
+                    "IMPORTANT RULES:\n"
+                    "- Do NOT stay on the search results page. You MUST click into actual videos.\n"
+                    "- Do NOT just read titles from search results — you must open videos and scroll.\n"
+                    "- If YouTube shows a consent/cookie popup, click 'Accept all' or 'Reject all'.\n"
+                    "- If asked to sign in, click 'No thanks' or press Escape and continue.\n"
+                    "- If a page loads blank or empty, wait 5 seconds then try navigating again."
                 ),
             },
             "x": {
@@ -1927,6 +2427,13 @@ class MasterBuildOrchestrator:
             f"8. Your findings feed a live business plan — be thorough and specific.\n"
         )
 
+    async def _staggered_run_agent(self, delay: float, spec: AgentSpec, **kwargs) -> None:
+        """Wait `delay` seconds then launch run_agent — prevents Chromium startup contention."""
+        if delay > 0:
+            print(f"[orchestrator] Agent {spec.name} ({spec.platform}) waiting {delay}s for staggered launch...")
+            await asyncio.sleep(delay)
+        await self.run_agent(spec, **kwargs)
+
     async def run_agent(
         self,
         spec: AgentSpec,
@@ -1994,7 +2501,7 @@ class MasterBuildOrchestrator:
                 if page_url and page_url not in _seen_urls:
                     _seen_urls.add(page_url)
                     keywords, summary = await self.ai.summarize_discovery(mission_prompt, primary_query, page_title, page_url, page_content)
-                    if keywords and keywords != "fallback":
+                    if keywords and keywords != "fallback" and is_valid_platform_content_url(spec.platform, page_url) and summary.strip():
                         self.blackboard.appendleft(keywords)
                         agent_context.log_discovery(spec.agent_id, spec.platform, keywords, summary, page_url)
                         await self.client.append_discovery(
@@ -2011,6 +2518,14 @@ class MasterBuildOrchestrator:
                             mission_id, agent_id=spec.agent_id, log_type="discovery",
                             message=f"Found: {keywords}", metadata={"url": page_url},
                         )
+                    elif is_valid_platform_content_url(spec.platform, page_url) is False:
+                        await self.client.append_log(
+                            mission_id,
+                            agent_id=spec.agent_id,
+                            log_type="search",
+                            message=f"Skipped non-content page: {page_title[:60] or page_url[:60]}",
+                            metadata={"url": page_url, "platform": spec.platform},
+                        )
 
                 # Check if mission should stop
                 if self.stop_event.is_set():
@@ -2021,7 +2536,8 @@ class MasterBuildOrchestrator:
             except Exception as e:
                 print(f"[agent {spec.agent_id}] step callback error: {e}")
 
-        _seen_urls: set[str] = set()
+        # Cross-agent URL dedup: load URLs already discovered by ALL agents
+        _seen_urls: set[str] = await self.client.get_all_discovered_urls(mission_id)
 
         try:
             browser = build_local_browser_session(spec.agent_id, spec.platform, headless=self.headless)
@@ -2039,6 +2555,9 @@ class MasterBuildOrchestrator:
                 metadata={"seed_queries": seed_queries, "curated_links": curated_links[:3], "llm": model_label},
             )
 
+            # Platform-tuned step limits: YouTube needs more steps for deep video exploration
+            max_steps = 90 if spec.platform == "youtube" else 60
+
             # Run browser-use Agent — it handles ALL browsing intelligence
             browsing_agent = Agent(
                 task=task_description,
@@ -2046,7 +2565,7 @@ class MasterBuildOrchestrator:
                 browser_session=browser,
             )
             history = await browsing_agent.run(
-                max_steps=60,
+                max_steps=max_steps,
                 on_step_end=on_step_end,
             )
 

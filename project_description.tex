@@ -1,0 +1,182 @@
+\documentclass[11pt, letterpaper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{fontenc}
+\usepackage{parskip}
+\usepackage{graphicx}
+
+% ── Colours ──────────────────────────────────────────────────
+\definecolor{accent}{HTML}{0EA5E9}
+\definecolor{dark}{HTML}{0F172A}
+\definecolor{muted}{HTML}{64748B}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+}
+
+\titleformat{\section}{\large\bfseries\color{dark}}{}{0em}{}[\vspace{-0.4em}\color{accent}\rule{\linewidth}{0.4pt}]
+\titleformat{\subsection}{\normalsize\bfseries\color{dark}}{}{0em}{}
+
+\pagestyle{empty}
+
+\begin{document}
+
+% ── Title ────────────────────────────────────────────────────
+\begin{center}
+  {\LARGE\bfseries MasterBuild}\\[6pt]
+  {\color{muted}\large Autonomous Market Intelligence for Rapid Enterprise Innovation}
+\end{center}
+
+\vspace{0.6em}
+
+% ── What it does ─────────────────────────────────────────────
+\section{What MasterBuild Does}
+
+Large organisations are full of smart people with good ideas---but turning a spark of
+intuition into something tangible usually means weeks of research, cross-functional
+meetings, slide decks, and cautious resource allocation. Most ideas never get that
+far; they die in a backlog because nobody can justify the headcount to find out
+whether the market actually cares.
+
+MasterBuild changes the math. A user types a single sentence---a product hunch, a
+new market angle, an internal tool concept---and an autonomous swarm of five AI
+research agents fans out across YouTube, X (Twitter), Reddit, Substack, and Brave
+Search simultaneously. Each agent operates its own headless browser, watches real
+content, reads real conversations, and pulls back concrete evidence: viral formats,
+pricing complaints, willingness-to-pay signals, expert analyses, and raw market
+sizing data.
+
+Within minutes those findings are synthesised into a living business plan that
+evolves in real time on a 3D dashboard. When the research reaches critical mass
+across all four social platforms, MasterBuild automatically produces a
+build-ready implementation plan---complete with screens, data models, workflows,
+monetisation strategy, and launch steps---and hands the whole thing off to a
+no-code builder so the team can have a working MVP prototype in their hands the
+same afternoon.
+
+No wasted sprints. No speculative planning. Just evidence-based conviction,
+delivered fast enough to keep up with the pace of ideas inside a growing company.
+
+% ── B2B value proposition ────────────────────────────────────
+\section{The Enterprise Problem We Solve}
+
+In most companies above a certain size, innovation bottlenecks are not about a
+lack of creativity---they are about the \emph{cost of validating} creativity.
+Product managers, founders, and internal entrepreneurs all face the same friction:
+
+\begin{itemize}[nosep]
+  \item \textbf{Opportunity cost of research.} Assigning even a small team to
+        investigate a new idea pulls them off revenue-generating work.
+  \item \textbf{Slow feedback loops.} By the time a concept survives internal
+        review, the market window may have shifted.
+  \item \textbf{Risk aversion by default.} Without hard evidence, leadership
+        defaults to saying ``not now''---and good ideas quietly expire.
+\end{itemize}
+
+MasterBuild collapses the validation cycle from weeks to minutes. It lets
+enterprises treat ideation the way modern engineering treats deploys:
+\emph{ship fast, measure immediately, iterate or discard with confidence.}
+Employees get to follow their intuition, and the company gets a lightweight
+process that surfaces real market demand before a single engineering hour is
+spent. The result is a culture where experimentation is cheap, fast, and
+data-backed---unlocking new revenue streams that would otherwise never leave
+the whiteboard.
+
+% ── How sponsors are used ────────────────────────────────────
+\section{Sponsor Technologies in Action}
+
+MasterBuild is built on top of three sponsor platforms, each playing a
+critical role in the end-to-end pipeline:
+
+\subsection{InsForge --- Full-Stack Agentic Backend}
+InsForge is the shared nervous system of the entire application. The Python
+orchestrator writes every discovery, agent observation, business plan revision,
+and builder output to InsForge's managed PostgreSQL database through a dedicated
+runtime client. The Next.js dashboard reads that same data back through the
+InsForge SDK and subscribes to nine real-time channels (missions, agents,
+discoveries, logs, signals, agent memory, agent thoughts, business plans, and
+builder outputs) so the UI updates live as agents work. InsForge also provides
+file storage for agent browser screenshots and authentication for both the
+frontend and the Python runtime. In short, InsForge is the only shared state
+between the two independent runtimes---without it, the agents and the dashboard
+could not communicate at all.
+
+\subsection{MiniMax (M2.7) --- The AI Reasoning Engine}
+Every piece of intelligence in MasterBuild is generated by MiniMax's M2.7 model.
+It powers the browser-use agents that navigate YouTube, X, Reddit, and Substack;
+it summarises raw page content into structured discoveries with keywords; it
+periodically rewrites the evolving business strategy; it synthesises
+cross-platform findings into a scored business plan; and it produces the final
+implementation plan---including screens, data models, workflows, and
+monetisation---that gets handed off for prototyping. MiniMax is the sole LLM
+behind all of these steps, accessed through a single unified completion
+interface.
+
+\subsection{Lovable --- From Plan to Prototype in One Click}
+Once MasterBuild's research agents have gathered validated evidence from all
+four platforms, the system automatically generates a concise, build-ready prompt
+and encodes it into a Lovable launch URL. The dashboard surfaces a
+``Build in Lovable'' button that opens Lovable with the prompt pre-loaded, so
+the user can go from a raw idea to a functional web-app prototype without
+writing a single line of code. This is the last mile of the pipeline: Lovable
+turns the AI-validated implementation plan into something a team can actually
+click through, test, and iterate on immediately.
+
+\subsection{Other Sponsors}
+Going Merry, Eragon, Anyshift, and Eleven Labs are valued sponsors of this
+hackathon but are not directly integrated into the current MasterBuild
+pipeline. We see clear future opportunities---voice-narrated research briefings
+via Eleven Labs, infrastructure monitoring through Anyshift as the platform
+scales, cross-org intelligence dashboards in Eragon, and mobile distribution
+through Going Merry---but we believe in honest reporting: if a sponsor's
+technology is not wired into the product today, we will not claim otherwise.
+
+% ── Architecture at a glance ─────────────────────────────────
+\section{How It Works}
+
+\begin{enumerate}[nosep]
+  \item \textbf{Mission launch.} The user submits a business idea through the
+        Next.js dashboard. A mission record is created in InsForge.
+  \item \textbf{Agent swarm.} Five agents launch concurrently, each with its
+        own headless Chromium instance, stealth fingerprint, and
+        platform-specific extraction logic:
+        \begin{itemize}[nosep]
+          \item \emph{Echo} (YouTube) --- viral formats, view counts, creator monetisation
+          \item \emph{Pulse} (X/Twitter) --- pain points, feature requests, pricing complaints
+          \item \emph{Thread} (Reddit) --- willingness-to-pay signals, community size
+          \item \emph{Ledger} (Substack) --- expert analysis, competitor breakdowns
+          \item \emph{Atlas} (Brave Search) --- market sizing and link curation
+        \end{itemize}
+  \item \textbf{Continuous synthesis.} Every 25--30 seconds, the orchestrator
+        rewrites the shared strategy document and the evolving business plan,
+        streaming updates to the dashboard in real time.
+  \item \textbf{Convergence.} When validated discoveries exist from all four
+        social platforms, MiniMax generates a finalised implementation plan
+        and Lovable handoff payload.
+  \item \textbf{Prototype.} The user clicks ``Build in Lovable'' and has a
+        working MVP scaffold within minutes.
+\end{enumerate}
+
+% ── Closing ──────────────────────────────────────────────────
+\section{Why This Matters}
+
+The companies that win in the next decade will not be the ones with the biggest
+R\&D budgets---they will be the ones that can test the most ideas, the fastest,
+with the least waste. MasterBuild gives every team inside an organisation the
+power to validate a market opportunity in the time it used to take to schedule
+the first meeting about it. That is not incremental improvement. That is a
+fundamentally different relationship with innovation.
+
+\vfill
+\begin{center}
+  \small\color{muted}
+  Built for the Agent Master Hackathon, April 2025.
+\end{center}
+
+\end{document}

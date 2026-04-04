@@ -1,7 +1,8 @@
-"""Builder Agent (Agent 6 — Forge): reads the business plan and designs an app via InsForge.
+"""Builder Agent (Agent 6 — Forge): reads the business plan and builds an app via InsForge.
 
 This agent is triggered once the business plan reaches sufficient confidence.
-It generates: database schema SQL, app feature specs, and deployment instructions.
+It generates: database schema SQL, app scaffold, feature specs, deployment, and monetization.
+It then EXECUTES the schema on InsForge and loops to refine until proficiency target is met.
 All outputs are written to builder_outputs in InsForge and to runtime/context/builder_report.md.
 """
 
@@ -13,8 +14,10 @@ from typing import Any
 
 import agent_context
 
-# Stages the builder progresses through
+# Stages the builder progresses through per iteration
 STAGES = ("schema", "scaffold", "features", "deploy", "monetization")
+PROFICIENCY_TARGET = 75  # out of 100 — loop until we hit this
+MAX_ITERATIONS = 3
 
 
 class BuilderAgent:
@@ -27,9 +30,14 @@ class BuilderAgent:
         self.prompt = prompt
         self.agent_id = 6
         self._outputs: dict[str, Any] = {}
+        self._iteration = 0
+        self._proficiency = 0
 
     async def run(self, stop_event: asyncio.Event) -> dict[str, Any]:
-        """Execute the full builder pipeline. Returns a dict of stage → output."""
+        """Execute the builder pipeline with refinement loop.
+
+        Loop: build → evaluate proficiency → refine → rebuild until target met.
+        """
         business_plan = agent_context.get_business_plan()
         if not business_plan or "Pending" in business_plan[:200]:
             return {"error": "Business plan not ready yet"}
@@ -37,39 +45,75 @@ class BuilderAgent:
         agent_context.log_agent_action(self.agent_id, "start", "Builder agent activated")
         await self.client.append_log(
             self.mission_id, agent_id=self.agent_id, log_type="status",
-            message="🔨 Forge (Builder Agent) activated — designing app from business plan",
+            message=f"🔨 Forge activated — building from business plan (target: {PROFICIENCY_TARGET}% proficiency)",
             metadata={},
         )
 
-        for stage in STAGES:
-            if stop_event.is_set():
-                break
-            try:
-                await self._set_stage_status(stage, "in_progress")
-                output = await self._execute_stage(stage, business_plan)
-                self._outputs[stage] = output
-                await self._set_stage_status(stage, "completed", output)
-                agent_context.log_agent_action(self.agent_id, stage, f"Completed: {str(output)[:100]}")
+        while self._iteration < MAX_ITERATIONS and not stop_event.is_set():
+            self._iteration += 1
+            # Re-read business plan each iteration (it may have been refined by research agents)
+            business_plan = agent_context.get_business_plan()
+
+            await self.client.append_log(
+                self.mission_id, agent_id=self.agent_id, log_type="status",
+                message=f"🔄 Build iteration {self._iteration}/{MAX_ITERATIONS}",
+                metadata={"iteration": self._iteration},
+            )
+
+            # Execute all stages
+            for stage in STAGES:
+                if stop_event.is_set():
+                    break
+                try:
+                    await self._set_stage_status(stage, "in_progress")
+                    output = await self._execute_stage(stage, business_plan)
+                    self._outputs[stage] = output
+                    await self._set_stage_status(stage, "completed", output)
+                    agent_context.log_agent_action(self.agent_id, stage, f"Completed: {str(output)[:100]}")
+                    await self.client.append_log(
+                        self.mission_id, agent_id=self.agent_id, log_type="status",
+                        message=f"✅ [{self._iteration}] Stage '{stage}' completed",
+                        metadata={"stage": stage, "iteration": self._iteration},
+                    )
+                except Exception as e:
+                    await self._set_stage_status(stage, "error", {"error": str(e)})
+                    agent_context.log_agent_action(self.agent_id, "error", f"Stage {stage}: {e}")
+                    await self.client.append_log(
+                        self.mission_id, agent_id=self.agent_id, log_type="error",
+                        message=f"Builder stage '{stage}' failed: {e}",
+                        metadata={"stage": stage},
+                    )
+
+            # Execute the schema on InsForge
+            if not stop_event.is_set():
+                await self._execute_schema_on_insforge()
+
+            # Evaluate proficiency
+            if not stop_event.is_set():
+                self._proficiency = await self._evaluate_proficiency(business_plan)
                 await self.client.append_log(
                     self.mission_id, agent_id=self.agent_id, log_type="status",
-                    message=f"✅ Builder stage '{stage}' completed",
-                    metadata={"stage": stage},
-                )
-            except Exception as e:
-                await self._set_stage_status(stage, "error", {"error": str(e)})
-                agent_context.log_agent_action(self.agent_id, "error", f"Stage {stage}: {e}")
-                await self.client.append_log(
-                    self.mission_id, agent_id=self.agent_id, log_type="error",
-                    message=f"Builder stage '{stage}' failed: {e}",
-                    metadata={"stage": stage},
+                    message=f"📊 Proficiency: {self._proficiency}% (target: {PROFICIENCY_TARGET}%)",
+                    metadata={"proficiency": self._proficiency, "iteration": self._iteration},
                 )
 
-        # Write summary report
+                if self._proficiency >= PROFICIENCY_TARGET:
+                    await self.client.append_log(
+                        self.mission_id, agent_id=self.agent_id, log_type="status",
+                        message=f"🎯 Proficiency target reached! {self._proficiency}% >= {PROFICIENCY_TARGET}%",
+                        metadata={},
+                    )
+                    break
+
+                # Not yet at target — generate refinement feedback for next iteration
+                if self._iteration < MAX_ITERATIONS:
+                    await self._generate_refinement_feedback(business_plan)
+
+        # Write final summary
         self._write_builder_report()
         return self._outputs
 
     async def _execute_stage(self, stage: str, business_plan: str) -> dict[str, Any]:
-        """Dispatch to the appropriate stage handler."""
         if stage == "schema":
             return await self._stage_schema(business_plan)
         elif stage == "scaffold":
@@ -82,16 +126,99 @@ class BuilderAgent:
             return await self._stage_monetization(business_plan)
         return {"error": f"Unknown stage: {stage}"}
 
+    async def _execute_schema_on_insforge(self) -> None:
+        """Actually create the database tables on InsForge."""
+        schema = self._outputs.get("schema", {})
+        sql = schema.get("sql", "")
+        if not sql:
+            return
+        try:
+            await self.client.execute_sql(sql)
+            await self.client.append_log(
+                self.mission_id, agent_id=self.agent_id, log_type="status",
+                message="🗄️ Database schema applied to InsForge",
+                metadata={"tables": [t.get("name") for t in schema.get("tables", [])]},
+            )
+            agent_context.log_agent_action(self.agent_id, "deploy", "Schema applied to InsForge DB")
+        except Exception as e:
+            await self.client.append_log(
+                self.mission_id, agent_id=self.agent_id, log_type="error",
+                message=f"Schema execution failed (non-fatal): {e}",
+                metadata={},
+            )
+
+    async def _evaluate_proficiency(self, business_plan: str) -> int:
+        """Use MiniMax to evaluate the current build's proficiency score."""
+        system = (
+            "You are a technical evaluator. Rate the quality of this app design on a scale of 0-100.\n"
+            "Consider: schema completeness, feature coverage, monetization viability, "
+            "alignment with the business plan, and deployment readiness.\n"
+            "Return ONLY a JSON object: {\"score\": <int>, \"gaps\": [<string>], \"strengths\": [<string>]}"
+        )
+        outputs_summary = json.dumps({
+            stage: {k: str(v)[:200] for k, v in output.items()} if isinstance(output, dict) else str(output)[:200]
+            for stage, output in self._outputs.items()
+        }, indent=1)
+        user = (
+            f"BUSINESS PLAN:\n{business_plan[:1500]}\n\n"
+            f"BUILD OUTPUTS:\n{outputs_summary[:3000]}\n\n"
+            "Evaluate proficiency."
+        )
+        try:
+            raw = await self.ai.generate_chat_completion(
+                system, user, max_tokens=500,
+                thought_type="refinement", agent_id=self.agent_id, action_label="proficiency_eval",
+            )
+            from masterbuild_runtime import extract_json_block
+            result = extract_json_block(raw)
+            score = int(result.get("score", 0))
+            self._outputs["proficiency_eval"] = result
+            return min(max(score, 0), 100)
+        except Exception:
+            return 50  # Default if evaluation fails
+
+    async def _generate_refinement_feedback(self, business_plan: str) -> None:
+        """Generate feedback to improve the next iteration."""
+        eval_result = self._outputs.get("proficiency_eval", {})
+        gaps = eval_result.get("gaps", [])
+        if not gaps:
+            return
+
+        feedback = f"Iteration {self._iteration} gaps: {', '.join(gaps[:5])}"
+        agent_context.log_agent_action(self.agent_id, "refinement", feedback)
+        await self.client.append_log(
+            self.mission_id, agent_id=self.agent_id, log_type="refinement",
+            message=f"🔧 Refinement needed: {feedback}",
+            metadata={"gaps": gaps},
+        )
+        # Signal research agents to dig deeper on gaps
+        for gap in gaps[:3]:
+            try:
+                await self.client.append_signal(
+                    self.mission_id, from_agent=self.agent_id, to_agent=0,
+                    signal_type="research_request",
+                    message=f"Builder needs more research on: {gap}",
+                    payload={"gap": gap, "iteration": self._iteration},
+                )
+            except Exception:
+                pass
+
     async def _stage_schema(self, business_plan: str) -> dict[str, Any]:
-        """Generate database schema SQL from the business plan."""
+        prev_schema = self._outputs.get("schema", {})
+        refinement_context = ""
+        if prev_schema and self._iteration > 1:
+            eval_result = self._outputs.get("proficiency_eval", {})
+            gaps = eval_result.get("gaps", [])
+            refinement_context = f"\n\nPREVIOUS GAPS TO ADDRESS:\n" + "\n".join(f"- {g}" for g in gaps)
+
         system = (
             "You are a database architect. Given a business plan, design a PostgreSQL schema.\n"
             "Return ONLY a JSON object with:\n"
             '  "tables": array of {name, columns: [{name, type, constraints}], description}\n'
-            '  "sql": the full CREATE TABLE SQL as a single string\n'
+            '  "sql": the full CREATE TABLE SQL as a single string (use IF NOT EXISTS)\n'
             '  "reasoning": why these tables support the business model\n'
         )
-        user = f"BUSINESS PLAN:\n{business_plan[:3000]}\n\nDesign the database schema."
+        user = f"BUSINESS PLAN:\n{business_plan[:3000]}\n\nDesign the database schema.{refinement_context}"
         raw = await self.ai.generate_chat_completion(
             system, user, max_tokens=2000,
             thought_type="planning", agent_id=self.agent_id, action_label="schema_design",
@@ -100,7 +227,6 @@ class BuilderAgent:
         return extract_json_block(raw)
 
     async def _stage_scaffold(self, business_plan: str) -> dict[str, Any]:
-        """Generate app scaffold specification."""
         schema_output = self._outputs.get("schema", {})
         system = (
             "You are a frontend architect. Given a business plan and database schema, "
@@ -124,7 +250,6 @@ class BuilderAgent:
         return extract_json_block(raw)
 
     async def _stage_features(self, business_plan: str) -> dict[str, Any]:
-        """Generate feature specifications with InsForge SDK integration patterns."""
         scaffold = self._outputs.get("scaffold", {})
         system = (
             "You are a product engineer. Given a business plan and app scaffold, "
@@ -146,9 +271,7 @@ class BuilderAgent:
         from masterbuild_runtime import extract_json_block
         return extract_json_block(raw)
 
-
     async def _stage_deploy(self, business_plan: str) -> dict[str, Any]:
-        """Generate deployment plan and instructions."""
         features = self._outputs.get("features", {})
         schema = self._outputs.get("schema", {})
         system = (
@@ -174,7 +297,6 @@ class BuilderAgent:
         return extract_json_block(raw)
 
     async def _stage_monetization(self, business_plan: str) -> dict[str, Any]:
-        """Generate monetization strategy and pricing model."""
         system = (
             "You are a monetization strategist. Given the business plan and app features, "
             "design a concrete monetization and pricing strategy.\n"
@@ -199,7 +321,6 @@ class BuilderAgent:
         return extract_json_block(raw)
 
     async def _set_stage_status(self, stage: str, status: str, output: Any = None) -> None:
-        """Update builder_outputs in InsForge."""
         try:
             existing = await self.client.list_records(
                 "builder_outputs",
@@ -231,8 +352,9 @@ class BuilderAgent:
             print(f"[builder] stage status update error: {e}")
 
     def _write_builder_report(self) -> None:
-        """Write a summary report to runtime/context/builder_report.md."""
-        lines = ["# Builder Report\n\n"]
+        lines = [
+            f"# Builder Report (Iteration {self._iteration}, Proficiency {self._proficiency}%)\n\n"
+        ]
         for stage in STAGES:
             output = self._outputs.get(stage)
             if output is None:
@@ -242,4 +364,12 @@ class BuilderAgent:
             else:
                 preview = json.dumps(output, indent=2)[:600] if isinstance(output, dict) else str(output)[:600]
                 lines.append(f"## {stage.title()}\n\n```json\n{preview}\n```\n\n")
+
+        eval_result = self._outputs.get("proficiency_eval", {})
+        if eval_result:
+            lines.append(f"## Proficiency Evaluation\n\n")
+            lines.append(f"- Score: {eval_result.get('score', '?')}%\n")
+            lines.append(f"- Strengths: {', '.join(eval_result.get('strengths', []))}\n")
+            lines.append(f"- Gaps: {', '.join(eval_result.get('gaps', []))}\n")
+
         agent_context.write_md("builder_report.md", "".join(lines), updated_by="builder")

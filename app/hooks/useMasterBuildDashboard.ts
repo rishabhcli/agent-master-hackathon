@@ -24,6 +24,57 @@ export interface FinalOption {
   evidence: FinalOptionEvidence[];
 }
 
+export interface FinalOptionsCoverage {
+  requiredPlatforms: readonly ("youtube" | "x" | "reddit" | "substack")[];
+  completedPlatforms: string[];
+  missingPlatforms: string[];
+  readyForLovable: boolean;
+}
+
+export interface ImplementationPlanScreen {
+  name: string;
+  purpose: string;
+  modules: string[];
+}
+
+export interface ImplementationPlanDataModel {
+  entity: string;
+  purpose: string;
+  fields: string[];
+}
+
+export interface ImplementationPlanWorkflow {
+  name: string;
+  trigger: string;
+  outcome: string;
+}
+
+export interface FinalImplementationPlan {
+  generatedBy: "MiniMax-M2.7";
+  title: string;
+  oneLiner: string;
+  problem: string;
+  targetUsers: string;
+  valueProp: string;
+  whyNow: string;
+  coreUserFlows: string[];
+  screens: ImplementationPlanScreen[];
+  dataModel: ImplementationPlanDataModel[];
+  workflows: ImplementationPlanWorkflow[];
+  integrations: string[];
+  monetization: string;
+  launchPlan: string[];
+  successMetrics: string[];
+  sourceEvidence: FinalOptionEvidence[];
+}
+
+export interface LovableHandoff {
+  title: string;
+  prompt: string;
+  launchUrl: string;
+  evidence: FinalOptionEvidence[];
+}
+
 export interface FinalOptionsPayload {
   generatedAt: string;
   isFinal: boolean;
@@ -32,6 +83,10 @@ export interface FinalOptionsPayload {
     signals: string[];
   };
   options: FinalOption[];
+  primaryOptionId: string;
+  coverage: FinalOptionsCoverage;
+  implementationPlan: FinalImplementationPlan;
+  lovableHandoff: LovableHandoff;
 }
 
 interface MissionRecord {
@@ -85,6 +140,121 @@ function toEpochMilliseconds(value: string | null | undefined) {
   return new Date(value).getTime();
 }
 
+function normalizeEvidenceList(value: unknown): FinalOptionEvidence[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.map((item) => {
+    const record = item as Record<string, unknown>;
+    return {
+      id: String(record.id ?? ""),
+      platform: String(record.platform ?? ""),
+      title: String(record.title ?? ""),
+      keywords: String(record.keywords ?? ""),
+      summary: String(record.summary ?? ""),
+      url: String(record.url ?? "")
+    };
+  }).filter((item) => item.url);
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
+function normalizeCoverage(value: unknown): FinalOptionsCoverage {
+  const record = (value && typeof value === "object") ? value as Record<string, unknown> : {};
+  const completedPlatforms = normalizeStringList(record.completedPlatforms);
+  const requiredPlatforms = ["youtube", "x", "reddit", "substack"] as const;
+  const missingPlatforms = normalizeStringList(record.missingPlatforms).length > 0
+    ? normalizeStringList(record.missingPlatforms)
+    : requiredPlatforms.filter((platform) => !completedPlatforms.includes(platform));
+
+  return {
+    requiredPlatforms,
+    completedPlatforms,
+    missingPlatforms,
+    readyForLovable: Boolean(record.readyForLovable) && missingPlatforms.length === 0
+  };
+}
+
+function normalizeImplementationPlan(
+  value: unknown,
+  fallbackOption: FinalOption | undefined,
+  fallbackEvidence: FinalOptionEvidence[]
+): FinalImplementationPlan {
+  const record = (value && typeof value === "object") ? value as Record<string, unknown> : {};
+
+  const screens = Array.isArray(record.screens)
+    ? record.screens.map((item) => {
+      const screen = item as Record<string, unknown>;
+      return {
+        name: String(screen.name ?? ""),
+        purpose: String(screen.purpose ?? ""),
+        modules: normalizeStringList(screen.modules)
+      };
+    }).filter((screen) => screen.name || screen.purpose || screen.modules.length > 0)
+    : [];
+
+  const dataModel = Array.isArray(record.dataModel)
+    ? record.dataModel.map((item) => {
+      const entity = item as Record<string, unknown>;
+      return {
+        entity: String(entity.entity ?? ""),
+        purpose: String(entity.purpose ?? ""),
+        fields: normalizeStringList(entity.fields)
+      };
+    }).filter((entity) => entity.entity || entity.purpose || entity.fields.length > 0)
+    : [];
+
+  const workflows = Array.isArray(record.workflows)
+    ? record.workflows.map((item) => {
+      const workflow = item as Record<string, unknown>;
+      return {
+        name: String(workflow.name ?? ""),
+        trigger: String(workflow.trigger ?? ""),
+        outcome: String(workflow.outcome ?? "")
+      };
+    }).filter((workflow) => workflow.name || workflow.trigger || workflow.outcome)
+    : [];
+
+  return {
+    generatedBy: "MiniMax-M2.7",
+    title: String(record.title ?? fallbackOption?.title ?? ""),
+    oneLiner: String(record.oneLiner ?? fallbackOption?.concept ?? ""),
+    problem: String(record.problem ?? fallbackOption?.whyPromising ?? ""),
+    targetUsers: String(record.targetUsers ?? fallbackOption?.audience ?? ""),
+    valueProp: String(record.valueProp ?? fallbackOption?.marketAngle ?? ""),
+    whyNow: String(record.whyNow ?? ""),
+    coreUserFlows: normalizeStringList(record.coreUserFlows),
+    screens,
+    dataModel,
+    workflows,
+    integrations: normalizeStringList(record.integrations),
+    monetization: String(record.monetization ?? ""),
+    launchPlan: normalizeStringList(record.launchPlan),
+    successMetrics: normalizeStringList(record.successMetrics),
+    sourceEvidence: normalizeEvidenceList(record.sourceEvidence).length > 0
+      ? normalizeEvidenceList(record.sourceEvidence)
+      : fallbackEvidence
+  };
+}
+
+function normalizeLovableHandoff(
+  value: unknown,
+  implementationPlan: FinalImplementationPlan,
+  fallbackEvidence: FinalOptionEvidence[]
+): LovableHandoff {
+  const record = (value && typeof value === "object") ? value as Record<string, unknown> : {};
+  const evidence = normalizeEvidenceList(record.evidence);
+
+  return {
+    title: String(record.title ?? implementationPlan.title),
+    prompt: String(record.prompt ?? ""),
+    launchUrl: String(record.launchUrl ?? ""),
+    evidence: evidence.length > 0 ? evidence : fallbackEvidence
+  };
+}
+
 function normalizeFinalOptions(value: unknown): FinalOptionsPayload | null {
   if (!value) {
     return null;
@@ -102,7 +272,29 @@ function normalizeFinalOptions(value: unknown): FinalOptionsPayload | null {
     return null;
   }
 
-  return value as FinalOptionsPayload;
+  const record = value as Record<string, unknown>;
+  const options = Array.isArray(record.options) ? record.options as FinalOption[] : [];
+  const fallbackOption = options[0];
+  const primaryOptionId = String(record.primaryOptionId ?? fallbackOption?.id ?? "");
+  const winningOption = options.find((option) => option.id === primaryOptionId) ?? fallbackOption;
+  const fallbackEvidence = winningOption?.evidence ?? [];
+  const coverage = normalizeCoverage(record.coverage);
+  const implementationPlan = normalizeImplementationPlan(record.implementationPlan, winningOption, fallbackEvidence);
+  const lovableHandoff = normalizeLovableHandoff(record.lovableHandoff, implementationPlan, fallbackEvidence);
+
+  return {
+    generatedAt: String(record.generatedAt ?? new Date().toISOString()),
+    isFinal: Boolean(record.isFinal),
+    marketResearch: {
+      summary: String((record.marketResearch as Record<string, unknown> | undefined)?.summary ?? ""),
+      signals: normalizeStringList((record.marketResearch as Record<string, unknown> | undefined)?.signals)
+    },
+    options,
+    primaryOptionId,
+    coverage,
+    implementationPlan,
+    lovableHandoff
+  };
 }
 
 function normalizeMission(row: Record<string, unknown> | null | undefined): MissionRecord | null {
@@ -407,7 +599,8 @@ export function useMasterBuildDashboard() {
 
   const stopAll = useCallback(async () => {
     try {
-      const result = await insforge.database.from("control_commands").insert([
+      // Insert stop command for orchestrator to pick up
+      await insforge.database.from("control_commands").insert([
         {
           mission_id: latestMission?.id ?? null,
           command: "stop_all",
@@ -416,28 +609,71 @@ export function useMasterBuildDashboard() {
         }
       ]);
 
-      if (result.error) {
-        throw result.error;
+      // Also directly mark mission as stopping so UI updates immediately
+      if (latestMission?.id) {
+        await insforge.database.from("missions").update({ status: "stopping" }).eq("id", latestMission.id).catch(() => {});
       }
+
+      // Mark all agents as stopped in DB
+      await insforge.database.from("agents").update({ status: "stopped", energy: 0 }).neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+
+      // Reload dashboard to reflect stopped state
+      await loadDashboard();
     } catch (caughtError) {
       const message =
         caughtError instanceof Error ? caughtError.message : "Failed to queue stop command.";
       setError(message);
     }
-  }, [latestMission?.id]);
+  }, [latestMission?.id, loadDashboard]);
 
   const resetAll = useCallback(async () => {
     try {
-      const result = await insforge.database.rpc("reset_masterbuild");
-      if (result.error) {
-        throw result.error;
+      // 1. Send stop command to kill browser sessions
+      if (latestMission?.id) {
+        await insforge.database.from("control_commands").insert([
+          { mission_id: latestMission.id, command: "stop_all", payload: { source: "reset" }, status: "pending" }
+        ]).catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
+
+      // 2. Try the RPC first
+      const rpcResult = await insforge.database.rpc("reset_masterbuild").catch(() => null);
+
+      // 3. If RPC failed or doesn't exist, manually wipe tables
+      if (!rpcResult || rpcResult.error) {
+        const tables = ["logs", "discoveries", "signals", "control_commands", "builder_outputs", "agent_memory"];
+        for (const table of tables) {
+          await insforge.database.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+        }
+        // Reset agents to idle
+        await insforge.database.from("agents").update({
+          status: "idle", current_url: "", assignment: "", energy: 100,
+          preview_bucket: null, preview_key: null, preview_updated_at: null
+        }).neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+        // Mark missions stopped
+        if (latestMission?.id) {
+          await insforge.database.from("missions").update({ status: "stopped" }).eq("id", latestMission.id).catch(() => {});
+        }
+      }
+
+      // 4. Clear frontend state immediately
+      setLatestMission(null);
+      setAgents([]);
+      setDiscoveries([]);
+      setLogs([]);
+      setSignals([]);
+      setThoughts([]);
+      setMemory([]);
+      setBusinessPlans([]);
+      setError(null);
+
+      // 5. Reload fresh state
       await loadDashboard();
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Failed to reset MasterBuild.";
       setError(message);
     }
-  }, [loadDashboard]);
+  }, [latestMission?.id, loadDashboard]);
 
   return {
     latestMission,

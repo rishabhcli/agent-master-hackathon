@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Lightbulb, Radio, RotateCcw, Search, StopCircle, Zap } from "lucide-react";
+import { Activity, Eye, Lightbulb, Monitor, Radio, RotateCcw, Search, StopCircle, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getAgentById, getLogIcon, type LogEntry } from "../hooks/useAgentData";
 import type { FinalOptionsPayload } from "../hooks/useMasterBuildDashboard";
@@ -15,6 +15,8 @@ interface CommandOverlayProps {
   activeAgentCount: number;
   isLoading: boolean;
   error: string | null;
+  viewMode: "command" | "observe";
+  onViewModeChange: (mode: "command" | "observe") => void;
   onCreateMission: (prompt: string) => void;
   onStopAll: () => void;
   onResetAll: () => void;
@@ -31,6 +33,8 @@ export function CommandOverlay({
   activeAgentCount,
   isLoading,
   error,
+  viewMode,
+  onViewModeChange,
   onCreateMission,
   onStopAll,
   onResetAll,
@@ -38,6 +42,7 @@ export function CommandOverlay({
 }: CommandOverlayProps) {
   const [query, setQuery] = useState("");
   const [showFinalOptions, setShowFinalOptions] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +54,50 @@ export function CommandOverlay({
       logRef.current.scrollTop = 0;
     }
   }, [logs]);
+
+  const handleReset = async () => {
+    // First send stop command to kill browser sessions, then reset DB
+    if (isRunning) {
+      onStopAll();
+      // Brief delay to let stop propagate before wiping DB
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    onResetAll();
+  };
+
+  const handleCopyLovablePrompt = async () => {
+    try {
+      const prompt = finalOptions?.lovableHandoff?.prompt?.trim();
+      if (!prompt || !navigator?.clipboard) {
+        throw new Error("Clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(prompt);
+      setCopyStatus("copied");
+      window.setTimeout(() => setCopyStatus("idle"), 2000);
+    } catch {
+      setCopyStatus("error");
+      window.setTimeout(() => setCopyStatus("idle"), 2000);
+    }
+  };
+
+  const coverage = finalOptions?.coverage ?? {
+    requiredPlatforms: ["youtube", "x", "reddit", "substack"] as const,
+    completedPlatforms: [],
+    missingPlatforms: [],
+    readyForLovable: false
+  };
+  const groupedEvidence = (finalOptions?.lovableHandoff?.evidence ?? []).reduce<Record<string, Array<{
+    id: string;
+    platform: string;
+    title: string;
+    keywords: string;
+    summary: string;
+    url: string;
+  }>>>((groups, evidence) => {
+    const key = evidence.platform || "other";
+    groups[key] = [...(groups[key] ?? []), evidence];
+    return groups;
+  }, {});
 
   return (
     <>
@@ -116,6 +165,253 @@ export function CommandOverlay({
               ) : null}
             </div>
 
+            <div
+              data-testid="final-implementation-plan"
+              style={{
+                display: "grid",
+                gap: 14,
+                padding: 18,
+                borderRadius: 18,
+                border: "1px solid rgba(34, 211, 238, 0.28)",
+                background: "linear-gradient(180deg, rgba(6, 16, 28, 0.96) 0%, rgba(7, 18, 34, 0.88) 100%)"
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.6, textTransform: "uppercase", color: "#22d3ee" }}>
+                    Final Implementation Plan
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#f8fafc" }}>
+                    {finalOptions.implementationPlan?.title || finalOptions.lovableHandoff?.title || finalOptions.options[0]?.title || "Validated MVP"}
+                  </div>
+                  <div style={{ fontSize: 12.5, lineHeight: 1.7, color: "#cbd5e1" }}>
+                    {finalOptions.implementationPlan?.oneLiner || finalOptions.options[0]?.concept || finalOptions.marketResearch.summary}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+                  <div style={{
+                    borderRadius: 999,
+                    border: "1px solid rgba(34, 211, 238, 0.32)",
+                    color: "#67e8f9",
+                    padding: "6px 10px",
+                    fontSize: 10,
+                    letterSpacing: 1.3,
+                    textTransform: "uppercase"
+                  }}>
+                    {finalOptions.implementationPlan?.generatedBy || "MiniMax-M2.7"}
+                  </div>
+                  {coverage.readyForLovable && finalOptions.lovableHandoff?.launchUrl ? (
+                    <a
+                      data-testid="lovable-launch"
+                      href={finalOptions.lovableHandoff.launchUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: "1px solid rgba(34, 211, 238, 0.4)",
+                        background: "linear-gradient(135deg, #22d3ee 0%, #0ea5e9 100%)",
+                        color: "#03111d",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        textDecoration: "none"
+                      }}
+                    >
+                      Build in Lovable
+                    </a>
+                  ) : (
+                    <button
+                      data-testid="lovable-launch"
+                      disabled
+                      style={{
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        border: "1px solid rgba(71, 85, 105, 0.4)",
+                        background: "rgba(15, 23, 42, 0.75)",
+                        color: "#64748b",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: "not-allowed"
+                      }}
+                    >
+                      Build in Lovable
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    data-testid="lovable-copy-prompt"
+                    onClick={handleCopyLovablePrompt}
+                    style={{
+                      padding: "9px 12px",
+                      borderRadius: 12,
+                      border: "1px solid rgba(148, 163, 184, 0.26)",
+                      background: "rgba(2, 6, 14, 0.72)",
+                      color: "#cbd5e1",
+                      fontSize: 11,
+                      cursor: "pointer"
+                    }}
+                  >
+                    {copyStatus === "copied" ? "Prompt Copied" : copyStatus === "error" ? "Copy Failed" : "Copy Lovable Prompt"}
+                  </button>
+                </div>
+              </div>
+
+              {!coverage.readyForLovable ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ fontSize: 11, color: "#fca5a5" }}>
+                    Lovable launch is disabled until research captures validated discoveries from all four platforms.
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {coverage.missingPlatforms.map((platform) => (
+                      <div
+                        key={platform}
+                        style={{
+                          borderRadius: 999,
+                          border: "1px solid rgba(248, 113, 113, 0.32)",
+                          color: "#fca5a5",
+                          padding: "6px 10px",
+                          fontSize: 10,
+                          letterSpacing: 1.1,
+                          textTransform: "uppercase"
+                        }}
+                      >
+                        Missing {platform}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div style={{ display: "grid", gap: 10, fontSize: 12, color: "#dbeafe" }}>
+                <div><span style={{ color: "#94a3b8" }}>Problem:</span> {finalOptions.implementationPlan?.problem}</div>
+                <div><span style={{ color: "#94a3b8" }}>Target users:</span> {finalOptions.implementationPlan?.targetUsers}</div>
+                <div><span style={{ color: "#94a3b8" }}>Value prop:</span> {finalOptions.implementationPlan?.valueProp}</div>
+                <div><span style={{ color: "#94a3b8" }}>Why now:</span> {finalOptions.implementationPlan?.whyNow}</div>
+                <div><span style={{ color: "#94a3b8" }}>Monetization:</span> {finalOptions.implementationPlan?.monetization}</div>
+              </div>
+
+              {finalOptions.implementationPlan?.coreUserFlows?.length ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#94a3b8" }}>
+                    Core User Flows
+                  </div>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {finalOptions.implementationPlan.coreUserFlows.map((flow) => (
+                      <div key={flow} style={{ fontSize: 11.5, color: "#e2e8f0" }}>• {flow}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {finalOptions.implementationPlan?.screens?.length ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#94a3b8" }}>
+                    Screens
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {finalOptions.implementationPlan.screens.map((screen) => (
+                      <div key={screen.name} style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(2, 6, 14, 0.72)", border: "1px solid rgba(71, 85, 105, 0.22)" }}>
+                        <div style={{ fontSize: 12, color: "#f8fafc", fontWeight: 600 }}>{screen.name}</div>
+                        <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 4 }}>{screen.purpose}</div>
+                        {screen.modules?.length ? (
+                          <div style={{ marginTop: 6, fontSize: 10.5, color: "#94a3b8" }}>
+                            Modules: {screen.modules.join(", ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {finalOptions.implementationPlan?.dataModel?.length ? (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#94a3b8" }}>
+                    Data Model
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {finalOptions.implementationPlan.dataModel.map((entity) => (
+                      <div key={entity.entity} style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(2, 6, 14, 0.72)", border: "1px solid rgba(71, 85, 105, 0.22)" }}>
+                        <div style={{ fontSize: 12, color: "#f8fafc", fontWeight: 600 }}>{entity.entity}</div>
+                        <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 4 }}>{entity.purpose}</div>
+                        {entity.fields?.length ? (
+                          <div style={{ marginTop: 6, fontSize: 10.5, color: "#94a3b8" }}>
+                            Fields: {entity.fields.join(", ")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {finalOptions.implementationPlan?.launchPlan?.length || finalOptions.implementationPlan?.successMetrics?.length ? (
+                <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#94a3b8" }}>
+                      Launch Plan
+                    </div>
+                    {(finalOptions.implementationPlan?.launchPlan ?? []).map((step) => (
+                      <div key={step} style={{ fontSize: 11.5, color: "#e2e8f0" }}>• {step}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#94a3b8" }}>
+                      Success Metrics
+                    </div>
+                    {(finalOptions.implementationPlan?.successMetrics ?? []).map((metric) => (
+                      <div key={metric} style={{ fontSize: 11.5, color: "#e2e8f0" }}>• {metric}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {Object.keys(groupedEvidence).length ? (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#94a3b8" }}>
+                    Evidence by Platform
+                  </div>
+                  {Object.entries(groupedEvidence).map(([platform, evidenceItems]) => (
+                    <div key={platform} style={{ display: "grid", gap: 8 }}>
+                      <div style={{ fontSize: 11, textTransform: "uppercase", color: "#67e8f9", letterSpacing: 1.2 }}>
+                        {platform}
+                      </div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {evidenceItems.map((evidence) => (
+                          <a
+                            key={`${platform}-${evidence.id}-${evidence.url}`}
+                            href={evidence.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              display: "grid",
+                              gap: 4,
+                              padding: "10px 12px",
+                              borderRadius: 12,
+                              border: "1px solid rgba(71, 85, 105, 0.28)",
+                              background: "rgba(2, 6, 14, 0.72)",
+                              color: "#bfdbfe",
+                              textDecoration: "none"
+                            }}
+                          >
+                            <div style={{ fontSize: 11.5, color: "#e2e8f0" }}>
+                              {evidence.title || evidence.keywords || evidence.url}
+                            </div>
+                            <div style={{ fontSize: 10.5, color: "#94a3b8", lineHeight: 1.5 }}>
+                              {evidence.summary || evidence.keywords}
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
             <div style={{ display: "grid", gap: 14 }}>
               {finalOptions.options.map((option) => (
                 <div
@@ -126,13 +422,20 @@ export function CommandOverlay({
                     gap: 10,
                     padding: 16,
                     borderRadius: 16,
-                    border: "1px solid rgba(124, 58, 237, 0.22)",
-                    background: "rgba(9, 14, 28, 0.82)"
+                    border: option.id === finalOptions.primaryOptionId ? "1px solid rgba(34, 211, 238, 0.32)" : "1px solid rgba(124, 58, 237, 0.22)",
+                    background: option.id === finalOptions.primaryOptionId ? "rgba(6, 18, 29, 0.88)" : "rgba(9, 14, 28, 0.82)"
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#f8fafc" }}>{option.title}</div>
-                    <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#a855f7" }}>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: "#f8fafc" }}>{option.title}</div>
+                      {option.id === finalOptions.primaryOptionId ? (
+                        <div style={{ fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", color: "#67e8f9" }}>
+                          Primary Winner
+                        </div>
+                      ) : null}
+                    </div>
+                    <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: option.id === finalOptions.primaryOptionId ? "#67e8f9" : "#a855f7" }}>
                       {option.recommendedFormat}
                     </div>
                   </div>
@@ -186,11 +489,12 @@ export function CommandOverlay({
         </div>
       ) : null}
 
+      {/* ── Header bar ── */}
       <div
         style={{
           position: "fixed",
           inset: "0 0 auto 0",
-          padding: "18px 22px",
+          padding: "14px 22px",
           zIndex: 40,
           display: "flex",
           justifyContent: "space-between",
@@ -203,12 +507,12 @@ export function CommandOverlay({
           <div style={{ fontSize: 11, letterSpacing: 3, textTransform: "uppercase", color: "#22d3ee" }}>
             MasterBuild
           </div>
-          <div style={{ marginTop: 6, fontSize: 12, color: "#94a3b8" }}>
+          <div style={{ marginTop: 4, fontSize: 12, color: "#94a3b8" }}>
             Local Browser Use command center
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ display: "grid", gap: 2, textAlign: "right" }}>
             <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#475569" }}>Operator</div>
             <div style={{ fontSize: 11, color: "#cbd5e1" }}>{userEmail}</div>
@@ -217,6 +521,47 @@ export function CommandOverlay({
             <Activity size={13} />
             <span>{activeAgentCount} ACTIVE</span>
           </div>
+
+          {/* View mode toggle — integrated in header */}
+          <div
+            style={{
+              display: "flex",
+              gap: 3,
+              background: "rgba(0,0,0,0.5)",
+              borderRadius: 8,
+              padding: 3,
+              border: "1px solid rgba(255,255,255,0.1)",
+            }}
+          >
+            {([
+              { key: "command" as const, label: "Command Center", icon: Monitor },
+              { key: "observe" as const, label: "Agent Stream", icon: Eye },
+            ]).map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => onViewModeChange(key)}
+                title={label}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "5px 10px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: viewMode === key ? "rgba(139,92,246,0.25)" : "transparent",
+                  color: viewMode === key ? "#c4b5fd" : "rgba(255,255,255,0.4)",
+                  fontSize: 11,
+                  fontWeight: viewMode === key ? 600 : 400,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={onSignOut}
             style={{
@@ -231,7 +576,7 @@ export function CommandOverlay({
             Sign Out
           </button>
           <button
-            onClick={onResetAll}
+            onClick={handleReset}
             style={{
               border: "1px solid rgba(248, 113, 113, 0.4)",
               background: "transparent",

@@ -1,6 +1,5 @@
 "use client";
 
-import { Eye, Monitor } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { AuthConsole } from "./components/AuthConsole";
@@ -64,51 +63,6 @@ function DashboardShell({
 
   return (
     <div style={{ position: "fixed", inset: 0, overflow: "hidden" }}>
-      {/* View mode toggle */}
-      <div
-        style={{
-          position: "absolute",
-          top: 12,
-          right: 16,
-          zIndex: 100,
-          display: "flex",
-          gap: 4,
-          background: "rgba(0,0,0,0.6)",
-          backdropFilter: "blur(8px)",
-          borderRadius: 8,
-          padding: 3,
-          border: "1px solid rgba(255,255,255,0.1)",
-        }}
-      >
-        {([
-          { key: "command" as const, label: "Command Center", icon: Monitor },
-          { key: "observe" as const, label: "Agent Stream", icon: Eye },
-        ]).map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setViewMode(key)}
-            title={label}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              padding: "5px 10px",
-              borderRadius: 6,
-              border: "none",
-              background: viewMode === key ? "rgba(139,92,246,0.25)" : "transparent",
-              color: viewMode === key ? "#c4b5fd" : "rgba(255,255,255,0.4)",
-              fontSize: 11,
-              fontWeight: viewMode === key ? 600 : 400,
-              cursor: "pointer",
-              transition: "all 0.15s",
-            }}
-          >
-            <Icon size={13} />
-            {label}
-          </button>
-        ))}
-      </div>
-
       {viewMode === "command" ? (
         <>
           <ResizablePane
@@ -117,7 +71,15 @@ function DashboardShell({
             maxWidth={600}
             left={
               <div style={{ height: "100%", overflow: "auto", padding: "72px 16px 16px", background: "linear-gradient(180deg, #06101b, #020408)" }}>
-                <BusinessPlanEvolution plans={businessPlans} />
+                <BusinessPlanEvolution
+                  plans={businessPlans}
+                  agents={agents}
+                  discoveries={discoveries}
+                  missionPrompt={latestMission?.prompt ?? ""}
+                  finalOptions={latestMission?.finalOptions ?? null}
+                  isRunning={Boolean(isRunning)}
+                  onStopAll={stopAll}
+                />
               </div>
             }
             right={
@@ -141,6 +103,12 @@ function DashboardShell({
               logs={logs}
               memory={memory}
               businessPlans={businessPlans}
+              agents={agents}
+              discoveries={discoveries}
+              missionPrompt={latestMission?.prompt ?? ""}
+              finalOptions={latestMission?.finalOptions ?? null}
+              isRunning={Boolean(isRunning)}
+              onStopAll={stopAll}
             />
           </div>
           <div style={{ width: 450, borderLeft: "1px solid rgba(255,255,255,0.08)", overflow: "hidden" }}>
@@ -159,6 +127,8 @@ function DashboardShell({
         activeAgentCount={activeAgentCount}
         isLoading={isLoading}
         error={error}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         onCreateMission={createMission}
         onStopAll={stopAll}
         onResetAll={resetAll}

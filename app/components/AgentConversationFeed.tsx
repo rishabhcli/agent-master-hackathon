@@ -41,13 +41,15 @@ export function AgentConversationFeed({ thoughts, signals, logs }: Props) {
 
   const items: FeedItem[] = [];
 
+  const truncate = (s: string, max = 200) => s.length > max ? s.slice(0, max) + "…" : s;
+
   for (const t of thoughts) {
     items.push({
       id: `t-${t._id}`,
       timestamp: t.timestamp,
       type: "thought",
       agentId: t.agent_id,
-      content: t.response_summary || t.prompt_summary,
+      content: truncate(t.response_summary || t.prompt_summary),
       detail: `${t.model} · ${t.tokens_used} tok · ${t.duration_ms}ms`,
       subtype: t.thought_type,
     });
@@ -58,7 +60,7 @@ export function AgentConversationFeed({ thoughts, signals, logs }: Props) {
       timestamp: s.timestamp,
       type: "signal",
       agentId: s.fromAgent,
-      content: `→ Agent ${s.toAgent}: ${s.signalType}`,
+      content: truncate(`→ Agent ${s.toAgent}: ${s.signalType}`),
       detail: s.message.slice(0, 120),
       subtype: s.signalType,
     });
@@ -69,7 +71,7 @@ export function AgentConversationFeed({ thoughts, signals, logs }: Props) {
       timestamp: l.timestamp,
       type: "log",
       agentId: l.agent_id,
-      content: l.message,
+      content: truncate(l.message),
       detail: l.type,
       subtype: l.type,
     });
