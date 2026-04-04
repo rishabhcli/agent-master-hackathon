@@ -1,5 +1,15 @@
 
 # InsForge & AI agent skills
+.env
+.env.local
+.env.*.local
+.next
+.venv
+__pycache__
+node_modules
+.playwright-mcp
+runtime
+*.tsbuildinfo
 .insforge
 .agent
 .agents

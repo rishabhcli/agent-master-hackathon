@@ -1,0 +1,4 @@
+browser-use
+httpx
+openai
+python-dotenv
