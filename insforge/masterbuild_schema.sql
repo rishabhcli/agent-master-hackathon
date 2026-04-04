@@ -41,6 +41,9 @@ create table if not exists public.agents (
     check (status in ('idle', 'searching', 'found_trend', 'weak', 'reassigning', 'exploiting', 'stopped', 'error')),
   current_url text not null default '',
   preview_url text,
+  preview_bucket text,
+  preview_key text,
+  preview_updated_at timestamptz,
   profile_path text not null default '',
   session_id text,
   assignment text not null default '',
@@ -50,6 +53,10 @@ create table if not exists public.agents (
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.agents add column if not exists preview_bucket text;
+alter table public.agents add column if not exists preview_key text;
+alter table public.agents add column if not exists preview_updated_at timestamptz;
 
 create table if not exists public.discoveries (
   id uuid primary key default gen_random_uuid(),
@@ -239,15 +246,15 @@ begin
     v_mission_id,
     mission_prompt,
     'queued',
-    'http://localhost:3000/agent-stream/1',
-    'http://localhost:3000/agent-stream/2',
-    'http://localhost:3000/agent-stream/3',
-    'http://localhost:3000/agent-stream/4',
-    'http://localhost:3000/agent-stream/5',
-    'http://localhost:3000/agent-stream/6',
-    'http://localhost:3000/agent-stream/7',
-    'http://localhost:3000/agent-stream/8',
-    'http://localhost:3000/agent-stream/9',
+    '/agent-stream/1',
+    '/agent-stream/2',
+    '/agent-stream/3',
+    '/agent-stream/4',
+    '/agent-stream/5',
+    '/agent-stream/6',
+    '/agent-stream/7',
+    '/agent-stream/8',
+    '/agent-stream/9',
     v_now,
     v_now
   );
@@ -266,15 +273,15 @@ begin
     updated_at,
     last_heartbeat
   ) values
-    (v_mission_id, 1, 'Vibe',   'tiktok',     'Discovery',  'idle', 'http://localhost:3000/agent-stream/1', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 2, 'Pulse',  'tiktok',     'Collection', 'idle', 'http://localhost:3000/agent-stream/2', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 3, 'Rhythm', 'tiktok',     'Analysis',   'idle', 'http://localhost:3000/agent-stream/3', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 4, 'Echo',   'youtube',    'Discovery',  'idle', 'http://localhost:3000/agent-stream/4', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 5, 'Nova',   'youtube',    'Collection', 'idle', 'http://localhost:3000/agent-stream/5', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 6, 'Blaze',  'youtube',    'Analysis',   'idle', 'http://localhost:3000/agent-stream/6', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 7, 'Cipher', 'duckduckgo', 'Discovery',  'idle', 'http://localhost:3000/agent-stream/7', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 8, 'Nexus',  'duckduckgo', 'Collection', 'idle', 'http://localhost:3000/agent-stream/8', mission_prompt, 100, v_now, v_now, v_now),
-    (v_mission_id, 9, 'Oracle', 'duckduckgo', 'Analysis',   'idle', 'http://localhost:3000/agent-stream/9', mission_prompt, 100, v_now, v_now, v_now);
+    (v_mission_id, 1, 'Vibe',   'tiktok',     'Discovery',  'idle', '/agent-stream/1', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 2, 'Pulse',  'tiktok',     'Collection', 'idle', '/agent-stream/2', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 3, 'Rhythm', 'tiktok',     'Analysis',   'idle', '/agent-stream/3', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 4, 'Echo',   'youtube',    'Discovery',  'idle', '/agent-stream/4', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 5, 'Nova',   'youtube',    'Collection', 'idle', '/agent-stream/5', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 6, 'Blaze',  'youtube',    'Analysis',   'idle', '/agent-stream/6', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 7, 'Cipher', 'duckduckgo', 'Discovery',  'idle', '/agent-stream/7', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 8, 'Nexus',  'duckduckgo', 'Collection', 'idle', '/agent-stream/8', mission_prompt, 100, v_now, v_now, v_now),
+    (v_mission_id, 9, 'Oracle', 'duckduckgo', 'Analysis',   'idle', '/agent-stream/9', mission_prompt, 100, v_now, v_now, v_now);
 
   insert into public.logs (mission_id, agent_id, type, message, metadata, created_at)
   values (

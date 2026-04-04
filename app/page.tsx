@@ -2,17 +2,25 @@
 
 import dynamic from "next/dynamic";
 import { useMemo } from "react";
+import { AuthConsole } from "./components/AuthConsole";
 import { CommandOverlay } from "./components/CommandOverlay";
 import { ContentWhiteboard } from "./components/ContentWhiteboard";
 import { ResizablePane } from "./components/ResizablePane";
 import { useMasterBuildDashboard } from "./hooks/useMasterBuildDashboard";
+import { useMasterBuildSession } from "./hooks/useMasterBuildSession";
 
 const CommandCenterScene = dynamic(
   () => import("./components/CommandCenterScene").then((mod) => mod.CommandCenterScene),
   { ssr: false }
 );
 
-export default function Home() {
+function DashboardShell({
+  userEmail,
+  onSignOut
+}: {
+  userEmail: string;
+  onSignOut: () => void;
+}) {
   const {
     latestMission,
     agents,
@@ -68,6 +76,7 @@ export default function Home() {
       />
 
       <CommandOverlay
+        userEmail={userEmail}
         isRunning={Boolean(isRunning)}
         isDeploying={isCreatingMission}
         missionPrompt={latestMission?.prompt ?? ""}
@@ -78,7 +87,61 @@ export default function Home() {
         onCreateMission={createMission}
         onStopAll={stopAll}
         onResetAll={resetAll}
+        onSignOut={onSignOut}
       />
     </div>
   );
+}
+
+export default function Home() {
+  const {
+    user,
+    pendingVerificationEmail,
+    isLoading,
+    isSubmitting,
+    error,
+    notice,
+    signIn,
+    signUp,
+    verifyEmail,
+    signInWithOAuth,
+    signOut
+  } = useMasterBuildSession();
+
+  if (isLoading) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          display: "grid",
+          placeItems: "center",
+          background: "#020408",
+          color: "#94a3b8",
+          fontFamily: "'JetBrains Mono', monospace",
+          letterSpacing: 1.5,
+          textTransform: "uppercase"
+        }}
+      >
+        Connecting to InsForge session...
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <AuthConsole
+        pendingVerificationEmail={pendingVerificationEmail}
+        isSubmitting={isSubmitting}
+        error={error}
+        notice={notice}
+        onSignIn={signIn}
+        onSignUp={signUp}
+        onVerifyEmail={verifyEmail}
+        onOAuth={signInWithOAuth}
+      />
+    );
+  }
+
+  return <DashboardShell userEmail={user.email} onSignOut={signOut} />;
 }

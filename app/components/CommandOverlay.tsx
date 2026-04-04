@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { getAgentById, getLogIcon, type LogEntry } from "../hooks/useAgentData";
 
 interface CommandOverlayProps {
+  userEmail: string;
   isRunning: boolean;
   isDeploying: boolean;
   missionPrompt: string;
@@ -15,9 +16,11 @@ interface CommandOverlayProps {
   onCreateMission: (prompt: string) => void;
   onStopAll: () => void;
   onResetAll: () => void;
+  onSignOut: () => void;
 }
 
 export function CommandOverlay({
+  userEmail,
   isRunning,
   isDeploying,
   missionPrompt,
@@ -27,7 +30,8 @@ export function CommandOverlay({
   error,
   onCreateMission,
   onStopAll,
-  onResetAll
+  onResetAll,
+  onSignOut
 }: CommandOverlayProps) {
   const [query, setQuery] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
@@ -63,10 +67,27 @@ export function CommandOverlay({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "grid", gap: 2, textAlign: "right" }}>
+            <div style={{ fontSize: 10, letterSpacing: 1.4, textTransform: "uppercase", color: "#475569" }}>Operator</div>
+            <div style={{ fontSize: 11, color: "#cbd5e1" }}>{userEmail}</div>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: isRunning ? "#34d399" : "#64748b" }}>
             <Activity size={13} />
             <span>{activeAgentCount} ACTIVE</span>
           </div>
+          <button
+            onClick={onSignOut}
+            style={{
+              border: "1px solid rgba(71, 85, 105, 0.34)",
+              background: "transparent",
+              color: "#cbd5e1",
+              padding: "8px 12px",
+              borderRadius: 10,
+              cursor: "pointer"
+            }}
+          >
+            Sign Out
+          </button>
           <button
             onClick={onResetAll}
             style={{

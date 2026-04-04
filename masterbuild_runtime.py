@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 import httpx
 from browser_use import BrowserSession
@@ -79,12 +79,12 @@ class InsForgeRuntimeClient:
         token = os.getenv("MASTERBUILD_INSFORGE_TOKEN") or os.getenv("NEXT_PUBLIC_INSFORGE_ANON_KEY", "")
         if not token:
             raise RuntimeError("Missing MASTERBUILD_INSFORGE_TOKEN or NEXT_PUBLIC_INSFORGE_ANON_KEY")
+        self.preview_bucket = os.getenv("MASTERBUILD_PREVIEW_BUCKET", "agent-previews")
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=45.0,
             headers={
                 "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
             },
         )
 
@@ -217,6 +217,75 @@ class InsForgeRuntimeClient:
                 }
             ],
         )
+
+    async def upload_preview_frame(self, agent_id: int, screenshot_path: str) -> dict[str, Any]:
+        screenshot_file = Path(screenshot_path)
+        strategy = await self._request(
+            "POST",
+            f"/api/storage/buckets/{self.preview_bucket}/upload-strategy",
+            json={
+                "filename": screenshot_file.name,
+                "contentType": "image/jpeg",
+                "size": screenshot_file.stat().st_size,
+            },
+        )
+        strategy_payload = strategy.json()
+        if not isinstance(strategy_payload, dict):
+            raise RuntimeError("Invalid preview upload strategy from InsForge storage.")
+
+        upload_url = str(strategy_payload.get("uploadUrl", "")).strip()
+        object_key = str(strategy_payload.get("key", "")).strip()
+        method = str(strategy_payload.get("method", "")).strip()
+        if not upload_url or not object_key or method not in {"direct", "presigned"}:
+            raise RuntimeError("InsForge storage upload strategy is incomplete.")
+
+        with open(screenshot_path, "rb") as file_handle:
+            if method == "direct":
+                response = await self._client.put(
+                    upload_url,
+                    files={"file": (screenshot_file.name, file_handle, "image/jpeg")},
+                )
+            else:
+                fields = strategy_payload.get("fields", {})
+                multipart_fields = {}
+                if isinstance(fields, dict):
+                    multipart_fields.update({str(key): str(value) for key, value in fields.items()})
+                multipart_fields["file"] = (screenshot_file.name, file_handle, "image/jpeg")
+                async with httpx.AsyncClient(timeout=45.0) as upload_client:
+                    response = await upload_client.post(upload_url, files=multipart_fields)
+
+        response.raise_for_status()
+
+        if strategy_payload.get("confirmRequired"):
+            confirm_url = str(strategy_payload.get("confirmUrl", "")).strip()
+            if not confirm_url:
+                raise RuntimeError("InsForge storage confirm URL missing for preview upload.")
+            confirm_response = await self._request(
+                "POST",
+                confirm_url,
+                json={
+                    "size": screenshot_file.stat().st_size,
+                    "contentType": "image/jpeg",
+                },
+            )
+            payload = confirm_response.json()
+        else:
+            payload = {
+                "bucket": self.preview_bucket,
+                "key": object_key,
+            }
+
+        if not isinstance(payload, dict):
+            raise RuntimeError("Invalid preview upload response from InsForge storage.")
+        payload.setdefault("bucket", self.preview_bucket)
+        payload.setdefault("key", object_key)
+        return payload
+
+    async def delete_storage_object(self, bucket: str, object_key: str) -> None:
+        encoded_key = quote(object_key, safe="")
+        response = await self._client.delete(f"/api/storage/buckets/{bucket}/objects/{encoded_key}")
+        if response.status_code not in {200, 204, 404}:
+            response.raise_for_status()
 
 
 class PreviewManager:
@@ -395,6 +464,7 @@ class MasterBuildOrchestrator:
         energy = 100
         active_query = initial_query
         seen_urls: set[str] = set()
+        last_preview_key: str | None = None
         browser: BrowserSession | None = None
 
         try:
@@ -429,6 +499,7 @@ class MasterBuildOrchestrator:
                 screenshot_path = await browser.get_screenshot()
                 page_url = str(getattr(state, "url", search_url) or search_url)
                 page_title = str(getattr(state, "title", active_query) or active_query)
+                preview_upload: dict[str, Any] | None = None
 
                 await self.preview_manager.publish(
                     spec.agent_id,
@@ -438,6 +509,32 @@ class MasterBuildOrchestrator:
                     note=active_query,
                     screenshot_path=screenshot_path,
                 )
+                preview_updated_at: str | None = None
+                if screenshot_path:
+                    try:
+                        preview_upload = await self.client.upload_preview_frame(spec.agent_id, screenshot_path)
+                        uploaded_key = str(preview_upload.get("key", "")).strip()
+                        uploaded_bucket = str(preview_upload.get("bucket", self.client.preview_bucket)).strip() or self.client.preview_bucket
+                        if last_preview_key and last_preview_key != uploaded_key:
+                            await self.client.delete_storage_object(uploaded_bucket, last_preview_key)
+                        last_preview_key = uploaded_key or None
+                        preview_updated_at = utc_now() if uploaded_key else None
+                    except Exception as preview_error:
+                        preview_upload = (
+                            {
+                                "bucket": self.client.preview_bucket,
+                                "key": last_preview_key,
+                            }
+                            if last_preview_key
+                            else None
+                        )
+                        await self.client.append_log(
+                            mission_id,
+                            agent_id=spec.agent_id,
+                            log_type="status",
+                            message=f"Preview relay degraded: {preview_error}",
+                            metadata={"query": active_query},
+                        )
 
                 keywords, summary = await self.ai.summarize_discovery(mission_prompt, active_query, page_title, page_url)
                 if page_url not in seen_urls:
@@ -448,7 +545,7 @@ class MasterBuildOrchestrator:
                         agent_id=spec.agent_id,
                         platform=spec.platform,
                         source_url=page_url,
-                        thumbnail_url=f"http://localhost:3000/api/agent-stream/{spec.agent_id}/frame",
+                        thumbnail_url=f"/api/agent-stream/{spec.agent_id}/frame",
                         keywords=keywords,
                         summary=summary,
                     )
@@ -475,6 +572,9 @@ class MasterBuildOrchestrator:
                     current_url=page_url,
                     energy=energy,
                     last_discovery_keywords=[keywords],
+                    preview_bucket=(preview_upload or {}).get("bucket"),
+                    preview_key=(preview_upload or {}).get("key"),
+                    preview_updated_at=preview_updated_at,
                     last_heartbeat=utc_now(),
                 )
                 await self.preview_manager.publish(
@@ -519,7 +619,17 @@ class MasterBuildOrchestrator:
         finally:
             if browser is not None:
                 await browser.kill()
-            await self.client.update_agent(spec.agent_id, status="stopped", session_id=None, last_heartbeat=utc_now())
+            if last_preview_key:
+                await self.client.delete_storage_object(self.client.preview_bucket, last_preview_key)
+            await self.client.update_agent(
+                spec.agent_id,
+                status="stopped",
+                session_id=None,
+                preview_bucket=None,
+                preview_key=None,
+                preview_updated_at=None,
+                last_heartbeat=utc_now(),
+            )
 
     def choose_next_query(self, platform: str, mission_prompt: str, *, fallback: str) -> str:
         while self.blackboard:
