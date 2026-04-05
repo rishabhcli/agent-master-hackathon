@@ -70,7 +70,7 @@ function DashboardShell({
             minWidth={280}
             maxWidth={600}
             left={
-              <div style={{ height: "100%", overflow: "auto", padding: "72px 16px 16px", background: "linear-gradient(180deg, #06101b, #020408)" }}>
+              <div style={{ height: "100%", overflow: "auto", padding: "72px 16px 130px", background: "linear-gradient(180deg, #06101b, #020408)" }}>
                 <BusinessPlanEvolution
                   plans={businessPlans}
                   agents={agents}

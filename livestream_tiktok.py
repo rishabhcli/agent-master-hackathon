@@ -101,5 +101,4 @@ def build_local_browser_session(agent_id: int, platform: str, *, headless: bool)
         args=chromium_args,
         minimum_wait_page_load_time=3.0 if not headless else 1.0,
         wait_for_network_idle_page_load_time=10.0 if not headless else 8.0,
-        timeout=60000 if not headless else 30000,
     )

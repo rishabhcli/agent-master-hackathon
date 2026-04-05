@@ -39,6 +39,22 @@ interface Props {
 const CYAN = "#22d3ee";
 const PURPLE = "#8b5cf6";
 
+function buildLovableUrl(plan: BusinessPlan, mission: string): string {
+  const prompt = [
+    `Build a web application based on this market-validated business plan:`,
+    ``,
+    `Mission: ${mission}`,
+    ``,
+    plan.market_opportunity ? `Market Opportunity: ${plan.market_opportunity}` : "",
+    plan.competitive_landscape ? `Competition: ${plan.competitive_landscape}` : "",
+    plan.revenue_models ? `Revenue Model: ${plan.revenue_models}` : "",
+    plan.user_acquisition ? `Growth Strategy: ${plan.user_acquisition}` : "",
+    ``,
+    `Build a clean, modern MVP with auth, database, and a dashboard. Use React + Tailwind.`,
+  ].filter(Boolean).join("\n");
+  return `https://lovable.dev/?autosubmit=true#prompt=${encodeURIComponent(prompt)}`;
+}
+
 function confidenceColor(score: number) {
   if (score >= 70) return "#22c55e";
   if (score >= 40) return "#eab308";
@@ -891,41 +907,16 @@ export function BusinessPlanEvolution({
             gap: 6,
           }}
         >
-          {/* "Build in Lovable" — shown when ready and not running */}
-          {lovableReady && !isRunning && (
+          {/* Glowing "Build in Lovable" button — always show when plan exists */}
+          {latest && (
             <a
-              href={lovableUrl}
+              href={lovableUrl || buildLovableUrl(latest, missionPrompt)}
               target="_blank"
               rel="noopener noreferrer"
-              style={{
-                flex: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 5,
-                padding: "7px 0",
-                borderRadius: 6,
-                border: "none",
-                background: `linear-gradient(135deg, ${CYAN}22, ${PURPLE}22)`,
-                color: CYAN,
-                fontSize: 11,
-                fontWeight: 600,
-                textDecoration: "none",
-                cursor: "pointer",
-              }}
-            >
-              <ExternalLink size={12} />
-              Build in Lovable
-            </a>
-          )}
-
-          {/* "Stop & Build in Lovable" — shown when running */}
-          {isRunning && (
-            <button
-              onClick={() => {
-                onStopAll();
-                if (lovableUrl) {
-                  window.open(lovableUrl, "_blank", "noopener,noreferrer");
+              className="lovable-glow-btn"
+              onClick={(e) => {
+                if (isRunning) {
+                  onStopAll();
                 }
               }}
               style={{
@@ -933,20 +924,21 @@ export function BusinessPlanEvolution({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: 5,
-                padding: "7px 0",
-                borderRadius: 6,
-                border: `1px solid ${PURPLE}44`,
-                background: `rgba(139,92,246,0.08)`,
-                color: "#c4b5fd",
-                fontSize: 11,
-                fontWeight: 600,
+                gap: 6,
+                padding: "10px 0",
+                borderRadius: 8,
+                border: "1px solid rgba(168, 85, 247, 0.5)",
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 700,
+                textDecoration: "none",
                 cursor: "pointer",
+                letterSpacing: 0.5,
               }}
             >
-              <ExternalLink size={12} />
-              Stop &amp; Build in Lovable
-            </button>
+              <ExternalLink size={13} />
+              {isRunning ? "Stop & Build in Lovable" : "Build in Lovable"}
+            </a>
           )}
         </div>
       </div>

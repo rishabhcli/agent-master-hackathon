@@ -628,35 +628,10 @@ export function useMasterBuildDashboard() {
 
   const resetAll = useCallback(async () => {
     try {
-      // 1. Send stop command to kill browser sessions
-      if (latestMission?.id) {
-        await insforge.database.from("control_commands").insert([
-          { mission_id: latestMission.id, command: "stop_all", payload: { source: "reset" }, status: "pending" }
-        ]).catch(() => {});
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
+      // 1. Kill local browser-use Chrome windows and clear previews FIRST
+      await fetch("/api/reset-browsers", { method: "POST" }).catch(() => {});
 
-      // 2. Try the RPC first
-      const rpcResult = await insforge.database.rpc("reset_masterbuild").catch(() => null);
-
-      // 3. If RPC failed or doesn't exist, manually wipe tables
-      if (!rpcResult || rpcResult.error) {
-        const tables = ["logs", "discoveries", "signals", "control_commands", "builder_outputs", "agent_memory"];
-        for (const table of tables) {
-          await insforge.database.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
-        }
-        // Reset agents to idle
-        await insforge.database.from("agents").update({
-          status: "idle", current_url: "", assignment: "", energy: 100,
-          preview_bucket: null, preview_key: null, preview_updated_at: null
-        }).neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
-        // Mark missions stopped
-        if (latestMission?.id) {
-          await insforge.database.from("missions").update({ status: "stopped" }).eq("id", latestMission.id).catch(() => {});
-        }
-      }
-
-      // 4. Clear frontend state immediately
+      // 2. Clear frontend state IMMEDIATELY so UI goes blank
       setLatestMission(null);
       setAgents([]);
       setDiscoveries([]);
@@ -667,7 +642,35 @@ export function useMasterBuildDashboard() {
       setBusinessPlans([]);
       setError(null);
 
-      // 5. Reload fresh state
+      // 3. Send stop command
+      if (latestMission?.id) {
+        await insforge.database.from("control_commands").insert([
+          { mission_id: latestMission.id, command: "stop_all", payload: { source: "reset" }, status: "pending" }
+        ]).catch(() => {});
+      }
+
+      // 4. Wipe ALL tables — do both RPC and manual to be safe
+      await insforge.database.rpc("reset_masterbuild").catch(() => {});
+      // Also manually delete from every table (RPC may miss newly created tables)
+      const allTables = [
+        "builder_outputs", "business_plans", "agent_thoughts", "agent_memory",
+        "control_commands", "signals", "logs", "discoveries"
+      ];
+      await Promise.all(
+        allTables.map((table) =>
+          insforge.database.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {})
+        )
+      );
+      // Reset agents
+      await insforge.database.from("agents").update({
+        status: "idle", current_url: "", assignment: "", energy: 100,
+        preview_bucket: null, preview_key: null, preview_updated_at: null
+      }).neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+      // Delete all missions
+      await insforge.database.from("missions").delete().neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+
+      // 5. Brief pause then reload clean state
+      await new Promise((resolve) => setTimeout(resolve, 500));
       await loadDashboard();
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Failed to reset MasterBuild.";

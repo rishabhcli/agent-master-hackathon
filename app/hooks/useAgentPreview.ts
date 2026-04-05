@@ -197,6 +197,14 @@ export function useAgentPreview(
           note: record.assignment || "Waiting for browser relay"
         });
 
+        // If agent is idle/stopped with no preview, show placeholder (not stale local file)
+        if (!record.preview_key && (!record.status || record.status === "idle" || record.status === "stopped")) {
+          revokeObjectUrl();
+          lastPreviewKeyRef.current = null;
+          setFrameUrl(getAgentPlaceholderFrameUrl(agentId, "Awaiting mission"));
+          return;
+        }
+
         if (record.preview_bucket && record.preview_key && record.preview_key !== lastPreviewKeyRef.current) {
           try {
             const download = await insforge.storage.from(record.preview_bucket).download(record.preview_key);

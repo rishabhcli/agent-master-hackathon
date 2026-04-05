@@ -570,7 +570,8 @@ export function CommandOverlay({
               color: "#cbd5e1",
               padding: "8px 12px",
               borderRadius: 10,
-              cursor: "pointer"
+              cursor: "pointer",
+              transition: "background 0.2s ease, border-color 0.2s ease"
             }}
           >
             Sign Out
@@ -586,7 +587,8 @@ export function CommandOverlay({
               display: "flex",
               alignItems: "center",
               gap: 8,
-              cursor: "pointer"
+              cursor: "pointer",
+              transition: "background 0.2s ease, border-color 0.2s ease, transform 0.15s ease"
             }}
           >
             <RotateCcw size={13} />
@@ -622,7 +624,7 @@ export function CommandOverlay({
             {logs.slice(0, 35).map((log) => {
               const agent = getAgentById(log.agent_id);
               return (
-                <div key={log._id} style={{ paddingBottom: 10, borderBottom: "1px solid rgba(30, 41, 59, 0.8)" }}>
+                <div key={log._id} className="animate-fade-in" style={{ paddingBottom: 10, borderBottom: "1px solid rgba(30, 41, 59, 0.8)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                     <span style={{ fontSize: 10, color: agent.color }}>{agent.name}</span>
                     <span style={{ fontSize: 9, color: "#64748b" }}>{new Date(log.timestamp * 1000).toLocaleTimeString()}</span>
@@ -695,7 +697,8 @@ export function CommandOverlay({
                 background: !query.trim() || isDeploying ? "#0f172a" : "linear-gradient(135deg, #22d3ee 0%, #0ea5e9 100%)",
                 color: !query.trim() || isDeploying ? "#64748b" : "#03111d",
                 fontWeight: 700,
-                cursor: !query.trim() || isDeploying ? "default" : "pointer"
+                cursor: !query.trim() || isDeploying ? "default" : "pointer",
+                transition: "background 0.25s ease, color 0.25s ease, transform 0.15s ease"
               }}
             >
               <Zap size={14} />

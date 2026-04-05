@@ -85,6 +85,8 @@ function SessionCard({
       type="button"
       data-testid={`session-card-${session.agentId}`}
       onClick={() => onSelect(session.agentId)}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.02)"; e.currentTarget.style.borderColor = `${session.color}70`; e.currentTarget.style.boxShadow = `0 16px 40px ${session.color}20`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.borderColor = `${session.color}40`; e.currentTarget.style.boxShadow = `0 12px 32px ${session.color}10`; }}
       style={{
         width: "100%",
         minWidth: 0,
@@ -99,7 +101,7 @@ function SessionCard({
         overflow: "hidden",
         cursor: "pointer",
         boxShadow: `0 12px 32px ${session.color}10`,
-        transition: "transform 280ms cubic-bezier(0.16, 1, 0.3, 1), border-color 280ms ease, box-shadow 280ms ease",
+        transition: "transform 300ms cubic-bezier(0.16, 1, 0.3, 1), border-color 300ms ease, box-shadow 300ms ease",
         willChange: "transform"
       }}
     >
@@ -119,7 +121,8 @@ function SessionCard({
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            display: "block"
+            display: "block",
+            transition: "opacity 0.4s ease"
           }}
         />
         <div
@@ -172,7 +175,8 @@ function SessionCard({
               letterSpacing: 1.1,
               textTransform: "uppercase",
               color: tone.text,
-              backdropFilter: "blur(8px)"
+              backdropFilter: "blur(8px)",
+              transition: "background 0.3s ease, border-color 0.3s ease, color 0.3s ease"
             }}
           >
             {status}
@@ -407,7 +411,9 @@ export function CommandCenterScene({
         </div>
 
         {focusedSession ? (
-          <FocusedSession session={focusedSession} onBack={() => setFocusedAgentId(null)} />
+          <div className="animate-fade-in">
+            <FocusedSession session={focusedSession} onBack={() => setFocusedAgentId(null)} />
+          </div>
         ) : (
           <div
             style={{

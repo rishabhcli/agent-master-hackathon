@@ -1453,11 +1453,12 @@ class MasterBuildOrchestrator:
             [{"agent_id": s.agent_id, "name": s.name, "platform": s.platform, "role": s.role} for s in AGENT_SPECS],
         )
 
-        llm_ok = await self.verify_llm()
-        if not llm_ok:
-            await self.client.update_mission(mission_id, status="error", stopped_at=utc_now())
-            await self.client.append_log(mission_id, agent_id=None, log_type="error", message="❌ MiniMax key is invalid or expired. Set a valid MINIMAX_API_KEY in .env.local and restart.", metadata={})
-            return
+        # Verify LLMs in background — don't block mission start
+        async def _bg_verify():
+            ok = await self.verify_llm()
+            if not ok:
+                await self.client.append_log(mission_id, agent_id=None, log_type="error", message="⚠ MiniMax health check failed — agents may error.", metadata={})
+        asyncio.create_task(_bg_verify())
 
         await self.client.update_mission(
             mission_id,
@@ -1489,15 +1490,31 @@ class MasterBuildOrchestrator:
             "reddit": "Reddit discussions",
             "substack": "Substack essays",
         }
-        platform_terms = {
-            platform: await self.ai.generate_terms(prompt, platform_labels[platform], 3)
+        # Generate search terms for ALL platforms in PARALLEL
+        term_tasks = {
+            platform: asyncio.create_task(self.ai.generate_terms(prompt, platform_labels[platform], 3))
             for platform in BROWSING_PLATFORMS
         }
-        curated_links = {
-            platform: await self.brave.curate_links(platform, platform_terms[platform], max_results=6)
-            for platform in BROWSING_PLATFORMS
-        }
+        platform_terms = {}
+        for platform, task in term_tasks.items():
+            try:
+                platform_terms[platform] = await task
+            except Exception:
+                platform_terms[platform] = [prompt]
 
+        # Curate links for ALL platforms in PARALLEL
+        link_tasks = {
+            platform: asyncio.create_task(self.brave.curate_links(platform, platform_terms[platform], max_results=6))
+            for platform in BROWSING_PLATFORMS
+        }
+        curated_links = {}
+        for platform, task in link_tasks.items():
+            try:
+                curated_links[platform] = await task
+            except Exception:
+                curated_links[platform] = []
+
+        # Launch ALL browser agents with minimal stagger (5s between each)
         tasks = []
         market_research_spec: AgentSpec | None = None
         browser_agent_index = 0
@@ -1515,8 +1532,7 @@ class MasterBuildOrchestrator:
                 )
                 continue
 
-            # Stagger browser launches by 12s each to avoid Chromium startup contention in non-headless mode
-            stagger_delay = browser_agent_index * 12
+            stagger_delay = browser_agent_index * 5
             browser_agent_index += 1
             tasks.append(
                 asyncio.create_task(
@@ -1649,14 +1665,14 @@ class MasterBuildOrchestrator:
                 raise
             except Exception:
                 pass
-            await asyncio.sleep(25)
+            await asyncio.sleep(15)  # hackathon: faster strategy updates
 
     async def periodic_business_plan_synthesis(self, mission_id: str, prompt: str) -> None:
         """Periodically synthesize discoveries into a structured business plan."""
         plan_version = 0
         last_discovery_count = 0
-        synthesis_threshold = 5  # synthesize every N new discoveries
-        await asyncio.sleep(40)  # Let agents gather initial data
+        synthesis_threshold = 2  # hackathon: synthesize quickly after just 2 new discoveries
+        await asyncio.sleep(20)  # shorter warmup for hackathon
         while not self.stop_event.is_set():
             try:
                 discoveries = await self.client.get_recent_discoveries(30)
@@ -1728,7 +1744,7 @@ class MasterBuildOrchestrator:
                 raise
             except Exception as e:
                 print(f"[orchestrator] business plan synthesis error: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)  # hackathon: check more frequently
 
     async def monitor_builder_trigger(self, mission_id: str, prompt: str) -> None:
         """Watch business plan confidence and launch the builder agent when ready.
@@ -1738,8 +1754,8 @@ class MasterBuildOrchestrator:
         we signal them to research the gaps and re-trigger the builder.
         """
         builder_launched = False
-        confidence_threshold = 40
-        await asyncio.sleep(60)  # Let research agents and plan synthesis warm up
+        confidence_threshold = 25  # hackathon: trigger builder sooner
+        await asyncio.sleep(30)  # shorter warmup
         while not self.stop_event.is_set() and not builder_launched:
             try:
                 plans = await self.client.list_records(
@@ -2234,8 +2250,9 @@ class MasterBuildOrchestrator:
             return ""
 
     # Stealth JS injected on every new document to suppress automation fingerprints
+    # Wrapped as immediately-invoked for evaluate() compatibility
     _STEALTH_SCRIPT = """
-() => {
+(() => {
     // Hide navigator.webdriver
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     // Spoof plugins
@@ -2254,19 +2271,165 @@ class MasterBuildOrchestrator:
     if (!window.chrome) {
         window.chrome = { runtime: {} };
     }
-}
+    return 'stealth_ok';
+})()
 """
 
     async def _inject_stealth_scripts(self, browser: BrowserSession) -> None:
-        """Register stealth JS to run on every new document load."""
+        """Inject stealth JS into the current page to suppress automation signals."""
         try:
             page = await browser.get_current_page()
             if page is None:
                 return
-            # Playwright's addInitScript runs the JS before any page scripts
-            await page.add_init_script(self._STEALTH_SCRIPT)
+            # browser-use uses CDP, not Playwright — use evaluate() instead of addInitScript
+            await page.evaluate(self._STEALTH_SCRIPT)
         except Exception as exc:
             print(f"[stealth] script injection failed: {exc}")
+
+    async def _login_to_x(self, browser: BrowserSession, spec: AgentSpec) -> bool:
+        """Auto-login to X (Twitter) using browser-use CDP API. Returns True if logged in."""
+        x_username = os.getenv("X_USERNAME", "").strip()
+        x_password = os.getenv("X_PASSWORD", "").strip()
+        if not x_username or not x_password:
+            print(f"[agent {spec.agent_id}] X_USERNAME/X_PASSWORD not set, skipping X login")
+            return False
+        try:
+            print(f"[agent {spec.agent_id}] Logging into X as {x_username}...")
+            page = await browser.get_current_page()
+            if page is None:
+                page = await browser.new_page()
+
+            await page.goto("https://x.com/i/flow/login")
+            await asyncio.sleep(5)
+
+            # Check if already logged in (redirected to home)
+            current_url = await page.get_url()
+            if "home" in current_url or current_url == "https://x.com/":
+                print(f"[agent {spec.agent_id}] ✅ X already logged in")
+                return True
+
+            # Use JS to interact with login form — more reliable than CSS selectors with CDP
+            # Step 1: Enter username
+            for attempt in range(3):
+                filled = await page.evaluate(f"""
+                    (() => {{
+                        const el = document.querySelector('input[autocomplete="username"], input[name="text"]');
+                        if (el) {{ el.focus(); el.value = ''; return true; }}
+                        return false;
+                    }})()
+                """)
+                if filled == "true":
+                    break
+                await asyncio.sleep(2)
+            else:
+                print(f"[agent {spec.agent_id}] Could not find username field after retries")
+                return False
+
+            # Type username via CDP input events for realistic input
+            username_inputs = await page.get_elements_by_css_selector('input[autocomplete="username"], input[name="text"]')
+            if username_inputs:
+                await username_inputs[0].fill(x_username)
+                await asyncio.sleep(0.5)
+            else:
+                print(f"[agent {spec.agent_id}] Username input element not found")
+                return False
+
+            # Click Next button
+            await page.press("Enter")
+            await asyncio.sleep(3)
+
+            # Handle verification prompt (unusual activity / confirm username)
+            verify_inputs = await page.get_elements_by_css_selector('input[data-testid="ocfEnterTextTextInput"]')
+            if verify_inputs:
+                print(f"[agent {spec.agent_id}] Verification prompt detected — entering username...")
+                await verify_inputs[0].fill(x_username)
+                await asyncio.sleep(0.5)
+                await page.press("Enter")
+                await asyncio.sleep(3)
+
+            # Step 2: Enter password
+            for attempt in range(5):
+                pw_inputs = await page.get_elements_by_css_selector('input[type="password"]')
+                if pw_inputs:
+                    await pw_inputs[0].fill(x_password)
+                    await asyncio.sleep(0.5)
+                    break
+                await asyncio.sleep(2)
+            else:
+                print(f"[agent {spec.agent_id}] Could not find password field after retries")
+                return False
+
+            # Click Log in / press Enter
+            await page.press("Enter")
+            await asyncio.sleep(6)
+
+            current_url = await page.get_url()
+            if "home" in current_url or "x.com" in current_url:
+                print(f"[agent {spec.agent_id}] ✅ X login successful — URL: {current_url}")
+                return True
+            else:
+                print(f"[agent {spec.agent_id}] ⚠ X login unclear — URL: {current_url}")
+                return False
+        except Exception as e:
+            print(f"[agent {spec.agent_id}] X login failed (will browse without login): {e}")
+            return False
+
+    async def _assist_x_login(self, browser: BrowserSession, spec: AgentSpec) -> None:
+        """Assist the LLM-driven X login by using React-compatible input simulation.
+
+        Only fills fields that are EMPTY to avoid doubling values with the LLM's typing.
+        Uses native input value setter to trigger React's onChange properly.
+        """
+        try:
+            page = await browser.get_current_page()
+            if page is None:
+                return
+            x_username = os.getenv("X_USERNAME", "").strip()
+            if not x_username:
+                return
+
+            current_url = await page.get_url()
+
+            # Only assist on the login/verification screens — fill username & verify fields only
+            # Do NOT pre-fill password: the LLM types it via keyboard (which works with React)
+            # and pre-filling causes doubled input since LLM uses clear=False
+            if "flow/login" in current_url or "login" in current_url:
+                # Pre-fill username field ONLY if empty
+                await page.evaluate(f"""
+                    (() => {{
+                        const el = document.querySelector('input[autocomplete="username"], input[name="text"]');
+                        if (el && !el.value) {{
+                            const nativeSetter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value'
+                            ).set;
+                            nativeSetter.call(el, '{x_username}');
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            return 'filled_username';
+                        }}
+                        return 'skip';
+                    }})()
+                """)
+
+                # Pre-fill verification field ONLY if empty
+                await page.evaluate(f"""
+                    (() => {{
+                        const el = document.querySelector('input[data-testid="ocfEnterTextTextInput"]');
+                        if (el && !el.value) {{
+                            const nativeSetter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value'
+                            ).set;
+                            nativeSetter.call(el, '{x_username}');
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            return 'filled_verify';
+                        }}
+                        return 'skip';
+                    }})()
+                """)
+        except Exception:
+            pass  # Best-effort — the LLM will still handle login via task instructions
+
 
     async def _take_agent_screenshot(self, browser: BrowserSession, spec: AgentSpec) -> str | None:
         try:
@@ -2292,100 +2455,55 @@ class MasterBuildOrchestrator:
             "youtube": {
                 "search_url": f"https://www.youtube.com/results?search_query={seed_queries[0].replace(' ', '+') if seed_queries else 'trending'}",
                 "guide": (
-                    "You are a business researcher browsing YouTube like a real person would.\n\n"
-                    "STEP-BY-STEP ACTIONS (follow this exactly):\n\n"
-                    "PHASE 1 — SEARCH & SCAN:\n"
-                    "1. You will land on a YouTube search results page. Wait for it to fully load.\n"
-                    "2. Scroll down SLOWLY 2-3 times to see more results. Read all the video titles visible.\n"
-                    "3. Pick the MOST RELEVANT video to the business mission — click its thumbnail or title.\n\n"
-                    "PHASE 2 — DEEP DIVE (repeat for 5-8 videos):\n"
-                    "4. On the video page: scroll down to see the description box. Click 'Show more' if visible.\n"
-                    "5. Read the FULL video title, view count, like count, and upload date.\n"
-                    "6. Read the description — look for: pricing, product links, affiliate links, business models.\n"
-                    "7. Scroll to the comments section. Read the top 5-8 comments. Look for:\n"
-                    "   - Complaints ('this doesn't work', 'too expensive', 'I wish...')\n"
-                    "   - Questions ('how do I...', 'where can I...')\n"
-                    "   - Success stories ('I made $X doing this')\n"
-                    "8. Click the channel name to see subscriber count. Then press Back.\n"
-                    "9. Click the NEXT relevant video from search results.\n\n"
-                    "PHASE 3 — SECOND QUERY:\n"
-                    "10. After 3-4 videos, click the YouTube search bar, clear it, type the SECOND seed query, press Enter.\n"
-                    "11. Repeat Phase 2 for 3-4 more videos.\n\n"
-                    "WHAT TO EXTRACT (be specific — exact numbers):\n"
-                    "- View count (e.g. '1.2M views') and like count\n"
-                    "- Channel subscriber count (e.g. '450K subscribers')\n"
-                    "- Revenue/pricing mentioned in description or video\n"
-                    "- Top pain points from comments (quote them verbatim)\n"
-                    "- Business model insights (how creators monetize this niche)\n\n"
-                    "IMPORTANT RULES:\n"
-                    "- Do NOT stay on the search results page. You MUST click into actual videos.\n"
-                    "- Do NOT just read titles from search results — you must open videos and scroll.\n"
-                    "- If YouTube shows a consent/cookie popup, click 'Accept all' or 'Reject all'.\n"
-                    "- If asked to sign in, click 'No thanks' or press Escape and continue.\n"
-                    "- If a page loads blank or empty, wait 5 seconds then try navigating again."
+                    "You are a business researcher browsing YouTube. Be FAST and focused.\n\n"
+                    "1. Search results page will load. Scroll once to see results.\n"
+                    "2. Click the MOST relevant video. On the video page, scroll to read title, view count, description.\n"
+                    "3. Scroll to comments — read the top 3 comments for pain points or insights.\n"
+                    "4. Press Back. Click one more relevant video. Repeat: read title, views, description, top comments.\n"
+                    "5. You are DONE after 2-3 videos. Extract: view counts, pain points from comments, business model insights.\n\n"
+                    "RULES: Click INTO videos, don't just read search titles. If popup appears, dismiss it."
                 ),
             },
             "x": {
-                "search_url": f"https://x.com/search?q={seed_queries[0].replace(' ', '%20') if seed_queries else 'trending'}&f=live",
+                "search_url": "https://x.com/i/flow/login",
                 "guide": (
-                    "You are researching X (Twitter) for pain points and market signals.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above (filters to live/latest tweets).\n"
-                    "2. Scroll to see at least 10–15 tweets on the search results page.\n"
-                    "3. Click into 4–5 tweet threads that look like they contain complaints, "
-                    "   product discussions, or 'I wish someone would build X' statements.\n"
-                    "4. On each thread: read the full thread including replies. Note like/retweet/reply counts.\n"
-                    "5. Click on 2–3 account profiles to check follower count and what they sell/promote.\n"
-                    "6. Search for a second seed query using the search bar.\n\n"
-                    "WHAT TO EXTRACT:\n"
-                    "- Direct quotes of pain points (exact wording)\n"
-                    "- Products being complained about or praised (with engagement counts)\n"
-                    "- Accounts with 10k+ followers who are influencers in this space\n"
-                    "- Threads where people are asking for solutions that don't exist yet\n\n"
-                    "BOT EVASION: X.com allows searching without login. If asked to log in, "
-                    "close the modal (press Escape or click X) and continue browsing the search results."
+                    "You are researching X (Twitter). Be FAST.\n\n"
+                    "STEP 1 — LOG IN (you MUST do this first):\n"
+                    f"- Type '{os.getenv('X_USERNAME', 'set X_USERNAME in .env.local')}' in the username/email field\n"
+                    "- Click the 'Next' button\n"
+                    "- If asked to verify identity, type the same username and click Next\n"
+                    f"- Type '{os.getenv('X_PASSWORD', 'set X_PASSWORD in .env.local')}' in the password field\n"
+                    "- Click 'Log in' button\n"
+                    "- Wait for the page to load\n\n"
+                    "STEP 2 — SEARCH:\n"
+                    f"- Navigate to: https://x.com/search?q={seed_queries[0].replace(' ', '%20') if seed_queries else 'trending'}&f=live\n"
+                    "- Scroll through tweets\n\n"
+                    "STEP 3 — EXTRACT (2-3 threads only):\n"
+                    "- Click into 2-3 tweet threads with complaints or product discussions\n"
+                    "- Note engagement counts (likes, retweets, replies)\n"
+                    "- You are DONE after 2-3 threads"
                 ),
             },
             "reddit": {
                 "search_url": f"https://www.reddit.com/search/?q={seed_queries[0].replace(' ', '+') if seed_queries else 'help'}&sort=top&t=year",
                 "guide": (
-                    "You are researching Reddit for unmet needs and market gaps.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above (sorts by top posts in the past year).\n"
-                    "2. Click into the 6–8 most upvoted posts from results.\n"
-                    "3. On each post: read the FULL body text, then scroll and read the top 8–10 comments. "
-                    "   Note the post score (upvotes) and comment count.\n"
-                    "4. Check the subreddit name — click it to see the subscriber count and community description.\n"
-                    "5. After the first query, search for the second seed query.\n\n"
-                    "WHAT TO EXTRACT:\n"
-                    "- Post score and comment count (demand signal strength)\n"
-                    "- Subreddit subscriber count (market size proxy)\n"
-                    "- Direct quotes like 'I'd pay for', 'take my money', 'I wish'\n"
-                    "- DIY workarounds people have built (signals unmet commercial need)\n"
-                    "- Names of tools/products being recommended or criticised\n\n"
-                    "BOT EVASION: Reddit is mostly accessible without login. If a login wall appears, "
-                    "scroll past it — Reddit lazy-loads content. Try appending .json to the URL for raw data."
+                    "You are researching Reddit. Be FAST.\n\n"
+                    "1. Search results will load. Click into the 2-3 most upvoted posts.\n"
+                    "2. On each post: read the body and top 3-5 comments. Note upvotes and comment count.\n"
+                    "3. Check the subreddit subscriber count.\n"
+                    "4. You are DONE after 2-3 posts. Extract: upvote counts, pain point quotes, product names.\n\n"
+                    "If login wall appears, scroll past it or press Escape."
                 ),
             },
             "substack": {
                 "search_url": f"https://substack.com/search?query={seed_queries[0].replace(' ', '%20') if seed_queries else 'trends'}",
                 "guide": (
-                    "You are researching Substack for industry narratives and market intelligence.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above.\n"
-                    "2. Click into 5–7 newsletter posts from the results.\n"
-                    "3. On each article: read the FULL article (scroll to the end), note the publication name "
-                    "   and subscriber count if visible. Note any pricing tiers mentioned.\n"
-                    "4. Click the newsletter/publication name to see its subscriber count and about page.\n"
-                    "5. Look for articles with large comment sections — click into 2–3 comments.\n\n"
-                    "WHAT TO EXTRACT:\n"
-                    "- Market size estimates and revenue figures quoted by authors\n"
-                    "- Competitor names and their stated pricing / positioning\n"
-                    "- Expert predictions and trend calls (with publication name and sub count)\n"
-                    "- Business model breakdowns (how companies make money in this space)\n"
-                    "- Reader comments that reveal unmet needs or strong opinions\n\n"
-                    "BOT EVASION: Substack is mostly open. If a paywall appears on an article, "
-                    "read the visible portion and move to the next result."
+                    "You are researching Substack. Be FAST.\n\n"
+                    "1. Search results will load. Click into 2-3 newsletter posts.\n"
+                    "2. On each article: scroll and read the key points. Note the publication name.\n"
+                    "3. Look for: market size estimates, competitor names, pricing, revenue figures.\n"
+                    "4. You are DONE after 2-3 articles. Extract: market data, competitor names, business models.\n\n"
+                    "If paywall appears, read the visible portion and move on."
                 ),
             },
         }
@@ -2415,16 +2533,9 @@ class MasterBuildOrchestrator:
             f"=== PLATFORM GUIDE ===\n{platform_guide}\n\n"
             f"CURRENT BUSINESS PLAN STATE:\n{bp_summary}\n\n"
             f"STRATEGY FROM ORCHESTRATOR:\n{strategy}\n\n"
-            f"=== EXECUTION RULES ===\n"
-            f"1. DO NOT stay on the homepage. Navigate INTO actual posts, videos, and threads.\n"
-            f"2. For EVERY page you visit: scroll down at least 3 times to load more content.\n"
-            f"3. Read descriptions, bodies, and top comments on every content page you open.\n"
-            f"4. Cover at least 6 distinct content pieces before finishing.\n"
-            f"5. If a page blocks you or shows a bot check: wait 3 seconds, scroll, try again.\n"
-            f"6. If completely blocked, navigate to the DIRECT SEARCH URL above as a fallback.\n"
-            f"7. Extract BUSINESS INTELLIGENCE: view counts, engagement metrics, pricing signals, "
-            f"   pain points quoted verbatim, monetisation patterns, audience sizes.\n"
-            f"8. Your findings feed a live business plan — be thorough and specific.\n"
+            f"RULES: Click INTO content (not just titles). Scroll to load more. "
+            f"Extract: view/upvote counts, pain points, pricing signals, business models. "
+            f"If blocked, wait 3s or use the DIRECT SEARCH URL. Be fast — cover 2-3 pieces max.\n"
         )
 
     async def _staggered_run_agent(self, delay: float, spec: AgentSpec, **kwargs) -> None:
@@ -2455,6 +2566,11 @@ class MasterBuildOrchestrator:
             try:
                 page_url = await browser.get_current_page_url() or ""
                 page_title = await browser.get_current_page_title() or ""
+
+                # Assist X login: on early steps, if we're on the login page, fill credentials via JS
+                if spec.platform == "x" and step_count <= 5 and "x.com" in page_url:
+                    await self._assist_x_login(browser, spec)
+
                 screenshot_path = await self._take_agent_screenshot(browser, spec)
 
                 # Extract real page content for context and discovery summarisation
@@ -2555,8 +2671,8 @@ class MasterBuildOrchestrator:
                 metadata={"seed_queries": seed_queries, "curated_links": curated_links[:3], "llm": model_label},
             )
 
-            # Platform-tuned step limits: YouTube needs more steps for deep video exploration
-            max_steps = 90 if spec.platform == "youtube" else 60
+            # Hackathon mode: fast results — fewer steps per agent
+            max_steps = 25 if spec.platform == "youtube" else 20
 
             # Run browser-use Agent — it handles ALL browsing intelligence
             browsing_agent = Agent(
