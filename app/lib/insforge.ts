@@ -26,14 +26,16 @@ export function isPreviewAuthBypassed() {
   return isDevBypassEnabled();
 }
 
-export const INSFORGE_BASE_URL =
-  process.env.NEXT_PUBLIC_INSFORGE_URL ?? "https://qnm7e5sc.us-west.insforge.app";
+export const INSFORGE_BASE_URL = process.env.NEXT_PUBLIC_INSFORGE_URL ?? "";
 
 export const INSFORGE_ANON_KEY = process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY ?? "";
 
 export const hasInsforgeConfig = Boolean(INSFORGE_BASE_URL && INSFORGE_ANON_KEY);
 
 export function getInsforgeConfigError() {
+  if (!INSFORGE_BASE_URL) {
+    return "Missing `NEXT_PUBLIC_INSFORGE_URL`. Set your InsForge backend URL before launching MasterBuild.";
+  }
   if (!INSFORGE_ANON_KEY) {
     return "Missing `NEXT_PUBLIC_INSFORGE_ANON_KEY`. Configure the InsForge anon token before launching MasterBuild.";
   }

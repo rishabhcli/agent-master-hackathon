@@ -3,9 +3,46 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { Monitor, PanelsTopLeft } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AGENTS, type AgentData, type AgentSignal } from "../hooks/useAgentData";
 import { useAgentPreview } from "../hooks/useAgentPreview";
+
+const GLOW_KEYFRAMES_ID = "masterbuild-glow-keyframes";
+
+function ensureGlowKeyframes() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(GLOW_KEYFRAMES_ID)) return;
+
+  const style = document.createElement("style");
+  style.id = GLOW_KEYFRAMES_ID;
+  style.textContent = `
+    @keyframes mb-glow-pulse {
+      0%, 100% {
+        box-shadow:
+          0 0 8px 1px var(--glow-color),
+          0 0 24px 4px var(--glow-color),
+          inset 0 0 12px 1px var(--glow-color-dim);
+        border-color: var(--glow-color);
+      }
+      50% {
+        box-shadow:
+          0 0 16px 4px var(--glow-color),
+          0 0 48px 12px var(--glow-color),
+          inset 0 0 20px 2px var(--glow-color-dim);
+        border-color: var(--glow-color-bright);
+      }
+    }
+    @keyframes mb-scanline {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100%); }
+    }
+    @keyframes mb-live-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 interface SessionViewModel {
   id: string;
@@ -79,6 +116,31 @@ function SessionCard({
   });
   const status = metadata.status || session.status;
   const tone = getStatusTone(status, session.isActive);
+  const isLive = isInteractiveStatus(status);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    ensureGlowKeyframes();
+  }, []);
+
+  // Smooth image transition
+  useEffect(() => {
+    if (imgRef.current) {
+      imgRef.current.style.opacity = "0.6";
+      const timer = setTimeout(() => {
+        if (imgRef.current) imgRef.current.style.opacity = "1";
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [frameUrl]);
+
+  const glowVars = isLive
+    ? {
+        "--glow-color": `${session.color}55`,
+        "--glow-color-dim": `${session.color}18`,
+        "--glow-color-bright": `${session.color}88`,
+      } as React.CSSProperties
+    : {};
 
   return (
     <button
@@ -86,21 +148,26 @@ function SessionCard({
       data-testid={`session-card-${session.agentId}`}
       onClick={() => onSelect(session.agentId)}
       style={{
+        ...glowVars,
         width: "100%",
         minWidth: 0,
         height: "100%",
         padding: 0,
         borderRadius: 16,
-        border: `1px solid ${session.color}40`,
+        border: isLive ? `1.5px solid ${session.color}66` : `1px solid ${session.color}40`,
         background: "rgba(6, 11, 22, 0.92)",
         color: "#e2e8f0",
         display: "grid",
         gridTemplateRows: "1fr auto",
         overflow: "hidden",
         cursor: "pointer",
-        boxShadow: `0 12px 32px ${session.color}10`,
+        boxShadow: isLive
+          ? `0 0 12px 2px ${session.color}33, 0 0 32px 6px ${session.color}18`
+          : `0 12px 32px ${session.color}10`,
+        animation: isLive ? "mb-glow-pulse 2.4s ease-in-out infinite" : "none",
         transition: "transform 280ms cubic-bezier(0.16, 1, 0.3, 1), border-color 280ms ease, box-shadow 280ms ease",
-        willChange: "transform"
+        willChange: "transform, box-shadow",
+        position: "relative",
       }}
     >
       <div
@@ -113,15 +180,41 @@ function SessionCard({
         }}
       >
         <img
+          ref={imgRef}
           src={frameUrl}
           alt={`${session.name} preview`}
           style={{
             width: "100%",
             height: "100%",
             objectFit: "cover",
-            display: "block"
+            display: "block",
+            transition: "opacity 120ms ease-out",
           }}
         />
+
+        {/* Scanline overlay when live */}
+        {isLive && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              overflow: "hidden",
+              pointerEvents: "none",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                height: "30%",
+                background: `linear-gradient(180deg, transparent, ${session.color}08, transparent)`,
+                animation: "mb-scanline 3s linear infinite",
+              }}
+            />
+          </div>
+        )}
+
         <div
           style={{
             position: "absolute",
@@ -159,23 +252,59 @@ function SessionCard({
             />
             {formatPlatform(session.platform)}
           </div>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              padding: "5px 8px",
-              borderRadius: 999,
-              background: tone.badge,
-              border: `1px solid ${tone.border}`,
-              fontSize: 9,
-              letterSpacing: 1.1,
-              textTransform: "uppercase",
-              color: tone.text,
-              backdropFilter: "blur(8px)"
-            }}
-          >
-            {status}
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {/* LIVE indicator */}
+            {isLive && (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "5px 8px",
+                  borderRadius: 999,
+                  background: "rgba(239, 68, 68, 0.2)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: 1.4,
+                  textTransform: "uppercase",
+                  color: "#fca5a5",
+                  backdropFilter: "blur(8px)",
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    background: "#ef4444",
+                    animation: "mb-live-dot 1.2s ease-in-out infinite",
+                    boxShadow: "0 0 8px rgba(239, 68, 68, 0.6)",
+                  }}
+                />
+                LIVE
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "5px 8px",
+                borderRadius: 999,
+                background: tone.badge,
+                border: `1px solid ${tone.border}`,
+                fontSize: 9,
+                letterSpacing: 1.1,
+                textTransform: "uppercase",
+                color: tone.text,
+                backdropFilter: "blur(8px)"
+              }}
+            >
+              {status}
+            </div>
           </div>
         </div>
       </div>
@@ -223,6 +352,30 @@ function FocusedSession({
   const { frameUrl, metadata, accessError } = useAgentPreview(session.agentId);
   const status = metadata.status || session.status;
   const tone = getStatusTone(status, session.isActive);
+  const isLive = isInteractiveStatus(status);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    ensureGlowKeyframes();
+  }, []);
+
+  useEffect(() => {
+    if (imgRef.current) {
+      imgRef.current.style.opacity = "0.7";
+      const timer = setTimeout(() => {
+        if (imgRef.current) imgRef.current.style.opacity = "1";
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [frameUrl]);
+
+  const glowVars = isLive
+    ? ({
+        "--glow-color": `${session.color}55`,
+        "--glow-color-dim": `${session.color}18`,
+        "--glow-color-bright": `${session.color}88`,
+      } as React.CSSProperties)
+    : {};
 
   return (
     <div
@@ -237,8 +390,40 @@ function FocusedSession({
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18 }}>
         <div style={{ display: "grid", gap: 6 }}>
-          <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: session.color }}>
-            Focused Browser Session
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: session.color }}>
+              Focused Browser Session
+            </div>
+            {isLive && (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  background: "rgba(239, 68, 68, 0.2)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: 1.4,
+                  textTransform: "uppercase",
+                  color: "#fca5a5",
+                }}
+              >
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    background: "#ef4444",
+                    animation: "mb-live-dot 1.2s ease-in-out infinite",
+                    boxShadow: "0 0 8px rgba(239, 68, 68, 0.6)",
+                  }}
+                />
+                LIVE
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#f8fafc" }}>{session.name}</div>
@@ -285,20 +470,54 @@ function FocusedSession({
 
       <div
         style={{
+          ...glowVars,
           minHeight: 0,
           borderRadius: 26,
           overflow: "hidden",
+          position: "relative",
           background: "rgba(4, 10, 19, 0.92)",
-          border: `1px solid ${session.color}33`,
-          boxShadow: `0 24px 80px ${session.color}16`,
-          transform: "translateZ(0)"
+          border: isLive ? `2px solid ${session.color}66` : `1px solid ${session.color}33`,
+          boxShadow: isLive
+            ? `0 0 20px 4px ${session.color}33, 0 0 60px 12px ${session.color}18`
+            : `0 24px 80px ${session.color}16`,
+          animation: isLive ? "mb-glow-pulse 2.4s ease-in-out infinite" : "none",
+          transform: "translateZ(0)",
         }}
       >
         <img
+          ref={imgRef}
           src={frameUrl}
           alt={`${session.name} focused preview`}
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+            transition: "opacity 150ms ease-out",
+          }}
         />
+
+        {isLive && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              overflow: "hidden",
+              pointerEvents: "none",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                height: "20%",
+                background: `linear-gradient(180deg, transparent, ${session.color}06, transparent)`,
+                animation: "mb-scanline 4s linear infinite",
+              }}
+            />
+          </div>
+        )}
       </div>
 
       <div

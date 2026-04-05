@@ -1,4 +1,4 @@
-browser-use
-httpx
-openai
-python-dotenv
+browser-use==0.2.5
+httpx==0.28.1
+openai==1.82.0
+python-dotenv==1.1.0

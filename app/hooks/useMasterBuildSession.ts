@@ -6,6 +6,7 @@ import {
   getInsforgeConfigError,
   hasInsforgeConfig,
   insforge,
+  isPreviewAuthBypassed,
   isUnsignedSessionError,
   primeInsforgeAccessTokenFromCookie,
   shouldBootstrapInsforgeSession,
@@ -20,6 +21,17 @@ interface MasterBuildUser {
     name?: string;
     avatar_url?: string | null;
   } | null;
+}
+
+function getPreviewBypassUser(): MasterBuildUser {
+  return {
+    id: "local-preview-user",
+    email: "local-preview@masterbuild.dev",
+    emailVerified: true,
+    profile: {
+      name: "Local Preview"
+    }
+  };
 }
 
 export function useMasterBuildSession() {
@@ -48,6 +60,14 @@ export function useMasterBuildSession() {
     }
 
     try {
+      if (isPreviewAuthBypassed()) {
+        setUser(getPreviewBypassUser());
+        setError(null);
+        setNotice(null);
+        setIsLoading(false);
+        return;
+      }
+
       primeInsforgeAccessTokenFromCookie();
       const result = await insforge.auth.getCurrentUser();
       if (result.error && !isUnsignedSessionError(result.error)) {
@@ -167,6 +187,14 @@ export function useMasterBuildSession() {
     setNotice(null);
 
     try {
+      if (isPreviewAuthBypassed()) {
+        setUser(getPreviewBypassUser());
+        clearPreviewAccessTokenCookie();
+        setError(null);
+        setNotice("Local preview auth bypass is enabled.");
+        return;
+      }
+
       const result = await insforge.auth.signOut();
       if (result.error) {
         throw result.error;

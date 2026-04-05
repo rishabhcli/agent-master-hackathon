@@ -84,7 +84,7 @@ export function useAgentPreview(
     pollIntervalMs?: number;
   } = {}
 ) {
-  const { enabled = true, pollIntervalMs = 3000 } = options;
+  const { enabled = true, pollIntervalMs = 800 } = options;
   const [frameUrl, setFrameUrl] = useState(() => getAgentPlaceholderFrameUrl(agentId, "Initializing relay"));
   const [metadata, setMetadata] = useState<AgentPreviewMetadata>({
     ...FALLBACK_METADATA,
@@ -221,6 +221,23 @@ export function useAgentPreview(
           revokeObjectUrl();
           lastPreviewKeyRef.current = null;
           setFrameUrl(`${fallbackFrameUrl}?ts=${Date.now()}`);
+        } else if (
+          record.preview_key === lastPreviewKeyRef.current &&
+          record.preview_updated_at &&
+          !["idle", "stopped"].includes(record.status || "")
+        ) {
+          // Same key but agent is active — re-download for freshest frame
+          try {
+            const download = await insforge.storage.from(record.preview_bucket!).download(record.preview_key);
+            if (download.data && isMounted) {
+              revokeObjectUrl();
+              const nextObjectUrl = URL.createObjectURL(download.data);
+              objectUrlRef.current = nextObjectUrl;
+              setFrameUrl(nextObjectUrl);
+            }
+          } catch {
+            // silently keep current frame
+          }
         }
       } catch (caughtError) {
         if (!isMounted) return;

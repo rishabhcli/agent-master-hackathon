@@ -12,8 +12,11 @@ from masterbuild_runtime import (
     MasterBuildAI,
     MasterBuildOrchestrator,
     build_lovable_launch_url,
+    build_lovable_prompt_from_plan,
     build_platform_coverage,
     filter_valid_discoveries,
+    is_authenticated_x_url,
+    is_x_auth_flow_url,
     is_valid_platform_content_url,
 )
 
@@ -60,6 +63,12 @@ class TestDiscoveryValidation:
         assert not is_valid_platform_content_url("x", "https://x.com/search?q=meetings")
         assert not is_valid_platform_content_url("reddit", "https://www.reddit.com/search/?q=meetings")
         assert not is_valid_platform_content_url("substack", "https://substack.com/search?query=meetings")
+
+    def test_x_auth_flow_detection_rejects_password_reset(self):
+        assert is_x_auth_flow_url("https://x.com/i/flow/password_reset?input_flow_data=abc")
+        assert not is_authenticated_x_url("https://x.com/i/flow/password_reset?input_flow_data=abc")
+        assert is_authenticated_x_url("https://x.com/home")
+        assert is_authenticated_x_url("https://x.com/search?q=meetings&f=live")
 
     def test_filter_valid_discoveries_keeps_only_content_urls(self):
         discoveries = VALID_DISCOVERIES + [
@@ -126,6 +135,45 @@ class TestMiniMaxImplementationPlan:
         assert result["title"] == "Meeting Command Center"
         assert result["lovable_prompt"].startswith("Build an MVP")
         assert result["screens"][0]["name"] == "Dashboard"
+
+
+class TestLovablePromptBuilder:
+    def test_build_lovable_prompt_from_plan_returns_structured_build_brief(self):
+        prompt = build_lovable_prompt_from_plan(
+            {
+                "title": "Meeting Command Center",
+                "oneLiner": "Turn every meeting into tasks, owners, and next steps.",
+                "problem": "Teams lose decisions after calls.",
+                "targetUsers": "Startup operators",
+                "valueProp": "Convert calls into action instantly.",
+                "whyNow": "AI makes structured follow-up newly possible.",
+                "coreUserFlows": ["Connect source", "Review output", "Sync tasks"],
+                "screens": [{"name": "Dashboard", "purpose": "Review work", "modules": ["Inbox", "Summary"]}],
+                "dataModel": [{"entity": "meetings", "purpose": "Store outputs", "fields": ["title", "date"]}],
+                "workflows": [{"name": "Task sync", "trigger": "Approval", "outcome": "Tasks created"}],
+                "integrations": ["Calendar", "Task manager"],
+                "monetization": "Per-seat subscription",
+                "launchPlan": ["Ship pilot", "Invite design partners"],
+                "successMetrics": ["Activation rate", "Retained teams"],
+                "sourceEvidence": [
+                    {
+                        "id": "yt-1",
+                        "platform": "youtube",
+                        "title": "AI meeting notes problem breakdown",
+                        "keywords": "meeting notes pain",
+                        "summary": "Creators and commenters complain about losing decisions after meetings.",
+                        "url": "https://www.youtube.com/watch?v=abc123",
+                    }
+                ],
+            },
+            prompt_seed="Build an MVP meeting follow-up app for startup operators.",
+        )
+
+        assert "Product foundation:" in prompt
+        assert "Required screens and modules:" in prompt
+        assert "Core data model:" in prompt
+        assert "Research signals to respect:" in prompt
+        assert "Build quality bar:" in prompt
 
 
 class TestFinalOptionsPayload:
@@ -205,8 +253,15 @@ class TestFinalOptionsPayload:
         assert len(payload["implementationPlan"]["sourceEvidence"]) == 4
         assert {item["platform"] for item in payload["lovableHandoff"]["evidence"]} == {"youtube", "x", "reddit", "substack"}
         assert payload["lovableHandoff"]["launchUrl"].startswith("https://lovable.dev/")
+        assert "Required screens and modules:" in payload["lovableHandoff"]["prompt"]
+        assert "Core data model:" in payload["lovableHandoff"]["prompt"]
+        assert "Build quality bar:" in payload["lovableHandoff"]["prompt"]
 
     def test_build_lovable_launch_url_encodes_prompt(self):
         url = build_lovable_launch_url("Build an MVP app for team notes")
         assert url.startswith("https://lovable.dev/?autosubmit=true#prompt=")
         assert "Build%20an%20MVP%20app%20for%20team%20notes" in url
+
+    def test_build_lovable_launch_url_preserves_line_breaks(self):
+        url = build_lovable_launch_url("Build an MVP app\n\nProduct foundation:")
+        assert "%0A%0AProduct%20foundation%3A" in url

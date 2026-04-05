@@ -4,7 +4,7 @@ import { createClient } from "@insforge/sdk";
 import { cookies } from "next/headers";
 import { MASTERBUILD_PREVIEW_ACCESS_COOKIE } from "./previewAccess";
 
-const DEFAULT_BASE_URL = "https://qnm7e5sc.us-west.insforge.app";
+const DEFAULT_BASE_URL = "";
 const PREVIEW_AUTH_BYPASS_ENV =
   process.env.MASTERBUILD_SKIP_PREVIEW_AUTH || process.env.MASTERBUILD_BYPASS_PREVIEW_AUTH;
 
@@ -23,11 +23,15 @@ function isPreviewAuthBypassed(request?: Request) {
 }
 
 function getServerInsforgeClient(accessToken: string) {
+  const baseUrl =
+    process.env.MASTERBUILD_INSFORGE_URL ??
+    process.env.NEXT_PUBLIC_INSFORGE_URL ??
+    DEFAULT_BASE_URL;
+  if (!baseUrl) {
+    throw new Error("Missing MASTERBUILD_INSFORGE_URL or NEXT_PUBLIC_INSFORGE_URL");
+  }
   return createClient({
-    baseUrl:
-      process.env.MASTERBUILD_INSFORGE_URL ??
-      process.env.NEXT_PUBLIC_INSFORGE_URL ??
-      DEFAULT_BASE_URL,
+    baseUrl,
     anonKey: process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY ?? "",
     isServerMode: true,
     edgeFunctionToken: accessToken

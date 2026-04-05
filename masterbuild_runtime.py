@@ -51,7 +51,7 @@ PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
     "substack": ("substack.com",),
 }
 LOVABLE_REQUIRED_PLATFORMS: tuple[str, ...] = ("youtube", "x", "reddit", "substack")
-LOVABLE_PROMPT_MAX_CHARS = 3500
+LOVABLE_PROMPT_MAX_CHARS = 5000
 GENERIC_DISCOVERY_SUMMARIES = {
     "",
     "youtube.com",
@@ -100,6 +100,34 @@ def is_valid_platform_content_url(platform: str, url: str) -> bool:
         return path.startswith("/p/")
 
     return False
+
+
+X_AUTH_FLOW_PATH_SNIPPETS: tuple[str, ...] = (
+    "/login",
+    "/i/flow/login",
+    "/i/flow/signup",
+    "/i/flow/password_reset",
+    "/i/flow/single_sign_on",
+    "/account/access",
+    "/account/begin_password_reset",
+)
+
+
+def is_x_auth_flow_url(url: str) -> bool:
+    if not url:
+        return False
+
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "/").lower()
+    if "x.com" not in host and "twitter.com" not in host:
+        return False
+
+    return any(snippet in path for snippet in X_AUTH_FLOW_PATH_SNIPPETS)
+
+
+def is_authenticated_x_url(url: str) -> bool:
+    return bool(url) and not is_x_auth_flow_url(url)
 
 
 def normalize_discovery_record(record: dict[str, Any]) -> dict[str, str]:
@@ -169,8 +197,8 @@ def build_platform_coverage(discoveries: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def build_lovable_launch_url(prompt: str) -> str:
-    compact_prompt = " ".join((prompt or "").split())[:LOVABLE_PROMPT_MAX_CHARS].strip()
-    return f"https://lovable.dev/?autosubmit=true#prompt={quote(compact_prompt, safe='')}" if compact_prompt else ""
+    trimmed_prompt = (prompt or "").strip()[:LOVABLE_PROMPT_MAX_CHARS].rstrip()
+    return f"https://lovable.dev/?autosubmit=true#prompt={quote(trimmed_prompt, safe='')}" if trimmed_prompt else ""
 
 
 def _clean_string_list(value: Any, *, limit: int = 8) -> list[str]:
@@ -277,36 +305,106 @@ def build_plan_source_evidence(
     return _dedupe_evidence_items(evidence)
 
 
-def build_lovable_prompt_from_plan(plan: dict[str, Any]) -> str:
+def build_lovable_prompt_from_plan(plan: dict[str, Any], *, prompt_seed: str = "") -> str:
     title = str(plan.get("title", "Validated MVP")).strip()
     one_liner = str(plan.get("oneLiner", "")).strip()
+    problem = str(plan.get("problem", "")).strip()
     target_users = str(plan.get("targetUsers", "")).strip()
     value_prop = str(plan.get("valueProp", "")).strip()
+    why_now = str(plan.get("whyNow", "")).strip()
     flows = _clean_string_list(plan.get("coreUserFlows"), limit=4)
-    screens = [
-        str(screen.get("name", "")).strip()
-        for screen in plan.get("screens", [])[:5]
-        if isinstance(screen, dict) and str(screen.get("name", "")).strip()
-    ]
-    entities = [
-        str(entity.get("entity", "")).strip()
-        for entity in plan.get("dataModel", [])[:5]
-        if isinstance(entity, dict) and str(entity.get("entity", "")).strip()
-    ]
+    screens = []
+    for screen in plan.get("screens", [])[:6]:
+        if not isinstance(screen, dict):
+            continue
+        name = str(screen.get("name", "")).strip()
+        purpose = str(screen.get("purpose", "")).strip()
+        modules = _clean_string_list(screen.get("modules"), limit=5)
+        if name:
+            detail = f"- {name}: {purpose or 'Support the core workflow.'}"
+            if modules:
+                detail += f" Modules: {', '.join(modules)}."
+            screens.append(detail)
+    entities = []
+    for entity in plan.get("dataModel", [])[:6]:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("entity", "")).strip()
+        purpose = str(entity.get("purpose", "")).strip()
+        fields = _clean_string_list(entity.get("fields"), limit=6)
+        if name:
+            detail = f"- {name}: {purpose or 'Core product data.'}"
+            if fields:
+                detail += f" Fields: {', '.join(fields)}."
+            entities.append(detail)
+    workflows = []
+    for workflow in plan.get("workflows", [])[:6]:
+        if not isinstance(workflow, dict):
+            continue
+        name = str(workflow.get("name", "")).strip()
+        trigger = str(workflow.get("trigger", "")).strip()
+        outcome = str(workflow.get("outcome", "")).strip()
+        if name:
+            workflows.append(
+                f"- {name}: trigger = {trigger or 'User action'}; outcome = {outcome or 'A meaningful result is created'}."
+            )
+    evidence = []
+    for item in plan.get("sourceEvidence", [])[:4]:
+        if not isinstance(item, dict):
+            continue
+        platform = str(item.get("platform", "research")).strip() or "research"
+        summary = str(item.get("summary", "")).strip()
+        title_hint = str(item.get("title", "")).strip()
+        if summary or title_hint:
+            evidence.append(f"- {platform.upper()}: {summary or title_hint}")
+    integrations = _clean_string_list(plan.get("integrations"), limit=6)
     monetization = str(plan.get("monetization", "")).strip()
+    launch_plan = _clean_string_list(plan.get("launchPlan"), limit=5)
+    success_metrics = _clean_string_list(plan.get("successMetrics"), limit=5)
 
-    parts = [
-        f"Build an MVP web app called {title}.",
-        one_liner,
-        f"Target users: {target_users}." if target_users else "",
-        f"Value proposition: {value_prop}." if value_prop else "",
-        f"Primary user flows: {', '.join(flows)}." if flows else "",
-        f"Required screens: {', '.join(screens)}." if screens else "",
-        f"Key data entities: {', '.join(entities)}." if entities else "",
-        f"Monetization: {monetization}." if monetization else "",
-        "Keep scope MVP-only and make the product immediately usable.",
+    intro = " ".join(prompt_seed.split()).strip() or f"Build a polished MVP web app called {title}."
+    lines = [
+        intro,
+        one_liner if one_liner and one_liner.lower() not in intro.lower() else "",
+        "",
+        "Product foundation:",
+        f"- Product name: {title}.",
+        f"- Target users: {target_users}." if target_users else "",
+        f"- Problem to solve: {problem}." if problem else "",
+        f"- Core value proposition: {value_prop}." if value_prop else "",
+        f"- Why this matters now: {why_now}." if why_now else "",
+        "",
+        "Primary user journeys:",
+        *[f"- {flow}" for flow in flows],
+        "",
+        "Required screens and modules:",
+        *screens,
+        "",
+        "Core data model:",
+        *entities,
+        "",
+        "Key workflows and automations:",
+        *workflows,
+        "",
+        "Integrations and business model:",
+        f"- Integrations: {', '.join(integrations)}." if integrations else "",
+        f"- Monetization: {monetization}." if monetization else "",
+        "",
+        "Research signals to respect:",
+        *evidence,
+        "",
+        "Build quality bar:",
+        "- Keep the scope to a real MVP, but make the core workflow fully usable end to end.",
+        "- Make the UI feel like a credible modern SaaS product, not a toy prototype.",
+        "- Design for desktop first but ensure the main flows work cleanly on mobile.",
+        "- Use seeded demo data and realistic empty states so the product feels alive on first load.",
+        "- Prioritize clarity, speed, and obvious calls to action over extra surface area.",
+        "",
+        "Launch expectations:",
+        *[f"- {item}" for item in launch_plan],
+        *[f"- Success metric: {item}" for item in success_metrics],
     ]
-    return " ".join(part for part in parts if part).strip()
+    return "\n".join(line for line in lines if line).strip()
 
 
 def utc_now() -> str:
@@ -458,14 +556,17 @@ class BraveSearchClient:
 
 class InsForgeRuntimeClient:
     def __init__(self) -> None:
-        self.base_url = os.getenv("MASTERBUILD_INSFORGE_URL", "https://qnm7e5sc.us-west.insforge.app").rstrip("/")
+        self.base_url = os.getenv("MASTERBUILD_INSFORGE_URL", "").rstrip("/")
+        if not self.base_url:
+            raise RuntimeError("Missing MASTERBUILD_INSFORGE_URL — set it in .env.local")
         token = os.getenv("MASTERBUILD_INSFORGE_TOKEN") or os.getenv("NEXT_PUBLIC_INSFORGE_ANON_KEY", "")
         if not token:
             raise RuntimeError("Missing MASTERBUILD_INSFORGE_TOKEN or NEXT_PUBLIC_INSFORGE_ANON_KEY")
         self.preview_bucket = os.getenv("MASTERBUILD_PREVIEW_BUCKET", "agent-previews")
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=45.0,
+            timeout=httpx.Timeout(connect=10.0, read=35.0, write=15.0, pool=10.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             headers={
                 "Authorization": f"Bearer {token}",
             },
@@ -474,64 +575,167 @@ class InsForgeRuntimeClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        for attempt in range(3):
+    @staticmethod
+    def _is_rate_limited_error(error: Exception) -> bool:
+        return isinstance(error, httpx.HTTPStatusError) and error.response is not None and error.response.status_code == 429
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        retry_on_429: bool = True,
+        max_retry_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        last_response: httpx.Response | None = None
+        for attempt in range(5):
             response = await self._client.request(method, path, **kwargs)
             if response.status_code == 429:
-                wait = 2 ** (attempt + 1)
+                if not retry_on_429:
+                    response.raise_for_status()
+                retry_after = response.headers.get("Retry-After", "").strip()
+                wait = int(float(retry_after)) if retry_after else 2 ** (attempt + 1)
+                if max_retry_seconds is not None and wait > max_retry_seconds:
+                    response.raise_for_status()
                 print(f"[insforge] rate limited on {path}, retrying in {wait}s")
                 await asyncio.sleep(wait)
+                last_response = response
                 continue
             response.raise_for_status()
             return response
+        if last_response is not None:
+            last_response.raise_for_status()
         response.raise_for_status()
         return response
 
-    async def list_records(self, table: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        response = await self._request("GET", f"/api/database/records/{table}", params=params)
+    async def list_records(
+        self,
+        table: str,
+        *,
+        params: dict[str, Any] | None = None,
+        retry_on_429: bool = True,
+        max_retry_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
+        response = await self._request(
+            "GET",
+            f"/api/database/records/{table}",
+            params=params,
+            retry_on_429=retry_on_429,
+            max_retry_seconds=max_retry_seconds,
+        )
         data = response.json()
         return data if isinstance(data, list) else []
 
-    async def insert_records(self, table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def insert_records(
+        self,
+        table: str,
+        rows: list[dict[str, Any]],
+        *,
+        retry_on_429: bool = True,
+        max_retry_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
         response = await self._request(
             "POST",
             f"/api/database/records/{table}",
             headers={"Prefer": "return=representation"},
             json=rows,
+            retry_on_429=retry_on_429,
+            max_retry_seconds=max_retry_seconds,
         )
         data = response.json()
         return data if isinstance(data, list) else []
 
-    async def update_records(self, table: str, filters: dict[str, str], values: dict[str, Any]) -> list[dict[str, Any]]:
+    async def update_records(
+        self,
+        table: str,
+        filters: dict[str, str],
+        values: dict[str, Any],
+        *,
+        retry_on_429: bool = True,
+        max_retry_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
         response = await self._request(
             "PATCH",
             f"/api/database/records/{table}",
             params=filters,
             headers={"Prefer": "return=representation"},
             json=values,
+            retry_on_429=retry_on_429,
+            max_retry_seconds=max_retry_seconds,
         )
         data = response.json()
         return data if isinstance(data, list) else []
 
-    async def rpc(self, function_name: str, payload: dict[str, Any] | None = None) -> Any:
-        response = await self._request("POST", f"/api/database/rpc/{function_name}", json=payload or {})
+    async def rpc(
+        self,
+        function_name: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        retry_on_429: bool = True,
+        max_retry_seconds: float | None = None,
+    ) -> Any:
+        response = await self._request(
+            "POST",
+            f"/api/database/rpc/{function_name}",
+            json=payload or {},
+            retry_on_429=retry_on_429,
+            max_retry_seconds=max_retry_seconds,
+        )
         return response.json()
 
     async def get_latest_mission(self) -> dict[str, Any] | None:
-        rows = await self.list_records("missions", params={"limit": 1, "order": "created_at.desc"})
-        return rows[0] if rows else None
+        try:
+            rows = await self.list_records(
+                "missions",
+                params={"limit": 1, "order": "created_at.desc"},
+                retry_on_429=False,
+            )
+            return rows[0] if rows else None
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] mission poll skipped due to rate limit")
+                return None
+            raise
 
     async def get_agents(self) -> list[dict[str, Any]]:
-        return await self.list_records("agents", params={"order": "agent_id.asc", "limit": MAX_AGENT_ID})
+        try:
+            return await self.list_records(
+                "agents",
+                params={"order": "agent_id.asc", "limit": MAX_AGENT_ID},
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] agent read skipped due to rate limit")
+                return []
+            raise
 
     async def get_recent_discoveries(self, limit: int = 20) -> list[dict[str, Any]]:
-        return await self.list_records("discoveries", params={"order": "created_at.desc", "limit": limit})
+        try:
+            return await self.list_records(
+                "discoveries",
+                params={"order": "created_at.desc", "limit": limit},
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] discovery read skipped due to rate limit")
+                return []
+            raise
 
     async def get_pending_commands(self) -> list[dict[str, Any]]:
-        return await self.list_records(
-            "control_commands",
-            params={"status": "eq.pending", "order": "created_at.asc", "limit": 25},
-        )
+        try:
+            return await self.list_records(
+                "control_commands",
+                params={"status": "eq.pending", "order": "created_at.asc", "limit": 25},
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] control command poll skipped due to rate limit")
+                return []
+            raise
 
     async def mark_command_handled(self, command_id: str) -> None:
         await self.update_records(
@@ -545,38 +749,63 @@ class InsForgeRuntimeClient:
 
     async def update_agent(self, agent_id: int, **values: Any) -> None:
         values.setdefault("updated_at", utc_now())
-        await self.update_records("agents", filters={"agent_id": f"eq.{agent_id}"}, values=values)
+        try:
+            await self.update_records(
+                "agents",
+                filters={"agent_id": f"eq.{agent_id}"},
+                values=values,
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print(f"[insforge] skipped agent {agent_id} update due to rate limit")
+                return
+            raise
 
     async def append_log(self, mission_id: str, *, agent_id: int | None, log_type: str, message: str, metadata: dict[str, Any] | None = None) -> None:
-        await self.insert_records(
-            "logs",
-            [
-                {
-                    "mission_id": mission_id,
-                    "agent_id": agent_id,
-                    "type": log_type,
-                    "message": message,
-                    "metadata": metadata or {},
-                    "created_at": utc_now(),
-                }
-            ],
-        )
+        try:
+            await self.insert_records(
+                "logs",
+                [
+                    {
+                        "mission_id": mission_id,
+                        "agent_id": agent_id,
+                        "type": log_type,
+                        "message": message,
+                        "metadata": metadata or {},
+                        "created_at": utc_now(),
+                    }
+                ],
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] skipped log write due to rate limit")
+                return
+            raise
 
     async def append_signal(self, mission_id: str, *, from_agent: int, to_agent: int, signal_type: str, message: str, payload: dict[str, Any] | None = None) -> None:
-        await self.insert_records(
-            "signals",
-            [
-                {
-                    "mission_id": mission_id,
-                    "from_agent": from_agent,
-                    "to_agent": to_agent,
-                    "signal_type": signal_type,
-                    "message": message,
-                    "payload": payload or {},
-                    "created_at": utc_now(),
-                }
-            ],
-        )
+        try:
+            await self.insert_records(
+                "signals",
+                [
+                    {
+                        "mission_id": mission_id,
+                        "from_agent": from_agent,
+                        "to_agent": to_agent,
+                        "signal_type": signal_type,
+                        "message": message,
+                        "payload": payload or {},
+                        "created_at": utc_now(),
+                    }
+                ],
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] skipped signal write due to rate limit")
+                return
+            raise
 
     async def execute_sql(self, sql: str) -> None:
         """Execute raw SQL on InsForge (for schema creation)."""
@@ -592,9 +821,13 @@ class InsForgeRuntimeClient:
             records = await self.list_records(
                 "discoveries",
                 params={"mission_id": f"eq.{mission_id}", "select": "source_url", "limit": 500},
+                retry_on_429=False,
             )
             return {str(r.get("source_url", "")) for r in records if r.get("source_url")}
-        except Exception:
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] discovered-url read skipped due to rate limit")
+                return set()
             return set()
 
     async def append_discovery(
@@ -609,37 +842,50 @@ class InsForgeRuntimeClient:
         keywords: str,
         summary: str,
     ) -> None:
-        await self.insert_records(
-            "discoveries",
-            [
-                {
-                    "mission_id": mission_id,
-                    "agent_id": agent_id,
-                    "platform": platform,
-                    "title": title,
-                    "source_url": source_url,
-                    "thumbnail_url": thumbnail_url,
-                    "keywords": keywords,
-                    "summary": summary,
-                    "likes": 0,
-                    "views": 0,
-                    "comments": 0,
-                    "created_at": utc_now(),
-                }
-            ],
-        )
+        try:
+            await self.insert_records(
+                "discoveries",
+                [
+                    {
+                        "mission_id": mission_id,
+                        "agent_id": agent_id,
+                        "platform": platform,
+                        "title": title,
+                        "source_url": source_url,
+                        "thumbnail_url": thumbnail_url,
+                        "keywords": keywords,
+                        "summary": summary,
+                        "likes": 0,
+                        "views": 0,
+                        "comments": 0,
+                        "created_at": utc_now(),
+                    }
+                ],
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                print("[insforge] skipped discovery write due to rate limit")
+                return
+            raise
 
     async def upload_preview_frame(self, agent_id: int, screenshot_path: str) -> dict[str, Any]:
         screenshot_file = Path(screenshot_path)
-        strategy = await self._request(
-            "POST",
-            f"/api/storage/buckets/{self.preview_bucket}/upload-strategy",
-            json={
-                "filename": screenshot_file.name,
-                "contentType": "image/jpeg",
-                "size": screenshot_file.stat().st_size,
-            },
-        )
+        try:
+            strategy = await self._request(
+                "POST",
+                f"/api/storage/buckets/{self.preview_bucket}/upload-strategy",
+                json={
+                    "filename": screenshot_file.name,
+                    "contentType": "image/jpeg",
+                    "size": screenshot_file.stat().st_size,
+                },
+                retry_on_429=False,
+            )
+        except Exception as error:
+            if self._is_rate_limited_error(error):
+                raise RuntimeError("Preview upload skipped due to rate limit") from error
+            raise
         strategy_payload = strategy.json()
         if not isinstance(strategy_payload, dict):
             raise RuntimeError("Invalid preview upload strategy from InsForge storage.")
@@ -678,6 +924,7 @@ class InsForgeRuntimeClient:
                     "size": screenshot_file.stat().st_size,
                     "contentType": "image/jpeg",
                 },
+                retry_on_429=False,
             )
             payload = confirm_response.json()
         else:
@@ -728,6 +975,7 @@ class InsForgeRuntimeClient:
                     "duration_ms": duration_ms,
                     "created_at": utc_now(),
                 }],
+                retry_on_429=False,
             )
         except Exception as e:
             print(f"[insforge] append_thought error: {e}")
@@ -766,6 +1014,7 @@ class InsForgeRuntimeClient:
                     "raw_plan": raw_plan,
                     "created_at": utc_now(),
                 }],
+                retry_on_429=False,
             )
         except Exception as e:
             print(f"[insforge] append_business_plan error: {e}")
@@ -894,14 +1143,18 @@ class MasterBuildAI:
 
     async def generate_terms(self, prompt: str, platform: str, count: int = 3) -> list[str]:
         system_prompt = (
-            "You create search terms for content discovery. "
+            "You create platform-native search terms for business research. "
             "Return only a JSON array of short search phrases. "
-            "Do NOT include the platform name in the search terms."
+            "Do NOT include the platform name in the search terms. "
+            "The queries should sound like natural searches a real user or operator would try, "
+            "not generic brainstorming labels."
         )
         user_prompt = (
             f"Mission: {prompt}\n"
             f"Platform: {platform}\n"
-            f"Return exactly {count} search phrases tuned for this platform. "
+            f"Return exactly {count} distinct search phrases tuned for this platform. "
+            "Cover a mix of user pain, workflow intent, alternatives, and monetization or growth signals when possible. "
+            "Prefer concrete audience/problem phrasing over vague trend words. "
             f"Do NOT include '{platform}' in the terms themselves."
         )
 
@@ -917,7 +1170,7 @@ class MasterBuildAI:
         except Exception:
             pass
 
-        return [f"{prompt} trend", f"{prompt} best", f"{prompt} examples"][:count]
+        return [f"{prompt} pain points", f"{prompt} workflow", f"{prompt} alternatives"][:count]
 
     async def generate_next_query(self, mission_prompt: str, platform: str, last_query: str, last_keywords: str, blackboard_hints: list[str]) -> str:
         system_prompt = (
@@ -946,11 +1199,23 @@ class MasterBuildAI:
 
         return last_keywords
 
-    async def summarize_discovery(self, prompt: str, query: str, title: str, url: str, page_content: str = "") -> tuple[str, str]:
+    async def summarize_discovery(
+        self,
+        prompt: str,
+        query: str,
+        title: str,
+        url: str,
+        page_content: str = "",
+        *,
+        platform: str = "",
+    ) -> tuple[str, str]:
         system_prompt = (
             "You summarize content-discovery findings for a business research mission. "
             "Return only JSON with keys keywords and summary. "
-            "Extract: engagement metrics, pain points, monetisation signals, audience size, viral patterns."
+            "keywords should be a short phrase capturing the commercial pattern. "
+            "summary should be a dense 2-3 sentence insight that explains what this page reveals about demand, "
+            "pain points, monetisation, audience behavior, or category momentum. "
+            "Mention concrete metrics, quoted language, or evidence when present."
         )
         content_section = ""
         if page_content:
@@ -958,11 +1223,12 @@ class MasterBuildAI:
             content_section = f"\nPage content (excerpt):\n{trimmed}\n"
         user_prompt = (
             f"Mission: {prompt}\n"
+            f"Platform: {platform or 'unknown'}\n"
             f"Query: {query}\n"
             f"Page title: {title}\n"
             f"URL: {url}\n"
             f"{content_section}\n"
-            "Produce compact discovery keywords and a rich one-sentence business-insight summary."
+            "Produce commercially useful discovery keywords and a rich business-insight summary."
         )
 
         try:
@@ -985,10 +1251,12 @@ class MasterBuildAI:
             "You are a product strategist performing market research from social-platform inspiration. "
             "You will receive discovery records from browser sessions on YouTube, X, Reddit, and Substack. "
             "Return only JSON with keys market_research_summary, key_signals, and options. "
+            "market_research_summary should synthesize the strongest cross-platform demand patterns in 2-4 sentences. "
             "key_signals must be an array of short strings. "
             "options must be an array of exactly 3 objects. "
             "Each option object must contain title, concept, audience, why_promising, market_angle, recommended_format, and evidence_ids. "
-            "evidence_ids must reference only the discovery IDs provided in the prompt."
+            "evidence_ids must reference only the discovery IDs provided in the prompt. "
+            "Make the options differentiated, commercially credible, and grounded in user behavior rather than abstract ideas."
         )
         discovery_lines = []
         for item in discoveries[:24]:
@@ -1065,7 +1333,10 @@ class MasterBuildAI:
             "data_model must be an array of {entity, purpose, fields}. "
             "workflows must be an array of {name, trigger, outcome}. "
             "Make the plan specific enough for an app builder to implement immediately. "
-            "Keep lovable_prompt concise and focused on MVP scope."
+            "Fill the screens, data model, and workflows with concrete MVP detail, not placeholders. "
+            "lovable_prompt must be a detailed multi-section build brief for Lovable, not a slogan. "
+            "It should clearly describe the product, target users, required screens, key workflows, data entities, "
+            "integrations, monetization, and UI expectations for a polished MVP."
         )
         discovery_lines = []
         for item in discoveries[:12]:
@@ -1078,7 +1349,7 @@ class MasterBuildAI:
             f"WINNING OPTION:\n{json.dumps(winning_option, indent=2)[:1800]}\n\n"
             f"BUSINESS PLAN:\n{business_plan[:1800]}\n\n"
             f"SUPPORTING DISCOVERIES:\n{chr(10).join(discovery_lines) or '(none)'}\n\n"
-            "Generate one finalized implementation plan and a concise Lovable prompt."
+            "Generate one finalized implementation plan and a detailed Lovable-ready build brief."
         )
 
         try:
@@ -1131,7 +1402,7 @@ class MasterBuildAI:
             "monetization": "Offer a free trial with premium limits unlocked on paid plans.",
             "launch_plan": ["Ship MVP", "Invite pilot users", "Measure activation", "Iterate on retention"],
             "success_metrics": ["Activation rate", "Weekly retained users", "Workflow completion rate"],
-            "lovable_prompt": option_concept,
+            "lovable_prompt": "",
         }
 
     # ── LLM-driven action planner ────────────────────────────────────
@@ -1435,6 +1706,14 @@ class MasterBuildOrchestrator:
                     await self.run_mission(mission)
                 else:
                     print(f"[orchestrator] No active mission, waiting... (status={mission.get('status') if mission else 'none'})")
+            except httpx.HTTPStatusError as e:
+                if e.response is not None and e.response.status_code == 429:
+                    print("[orchestrator] Rate limited while polling missions — backing off for 60s")
+                    await asyncio.sleep(60)
+                    continue
+                import traceback
+                print(f"[orchestrator] watch error: {e!r}")
+                traceback.print_exc()
             except Exception as e:
                 import traceback
                 print(f"[orchestrator] watch error: {e!r}")
@@ -1952,12 +2231,14 @@ class MasterBuildOrchestrator:
             fallback_one_liner=primary_option["concept"],
             evidence=final_evidence,
         )
-        lovable_prompt = str((raw_plan or {}).get("lovable_prompt", "")).strip() if isinstance(raw_plan, dict) else ""
-        if not lovable_prompt:
-            lovable_prompt = build_lovable_prompt_from_plan(implementation_plan)
+        lovable_prompt_seed = str((raw_plan or {}).get("lovable_prompt", "")).strip() if isinstance(raw_plan, dict) else ""
+        lovable_prompt = build_lovable_prompt_from_plan(
+            implementation_plan,
+            prompt_seed=lovable_prompt_seed,
+        )[:LOVABLE_PROMPT_MAX_CHARS]
         lovable_handoff = {
             "title": implementation_plan["title"],
-            "prompt": lovable_prompt[:LOVABLE_PROMPT_MAX_CHARS],
+            "prompt": lovable_prompt,
             "launchUrl": build_lovable_launch_url(lovable_prompt),
             "evidence": final_evidence,
         }
@@ -2254,19 +2535,359 @@ class MasterBuildOrchestrator:
     if (!window.chrome) {
         window.chrome = { runtime: {} };
     }
+    return 'stealth_ok';
 }
 """
 
     async def _inject_stealth_scripts(self, browser: BrowserSession) -> None:
-        """Register stealth JS to run on every new document load."""
+        """Inject stealth JS into the current page to suppress automation signals."""
         try:
             page = await browser.get_current_page()
             if page is None:
                 return
-            # Playwright's addInitScript runs the JS before any page scripts
-            await page.add_init_script(self._STEALTH_SCRIPT)
+            await page.evaluate(self._STEALTH_SCRIPT)
         except Exception as exc:
             print(f"[stealth] script injection failed: {exc}")
+
+    def _build_x_search_url(self, seed_queries: list[str], mission_prompt: str) -> str:
+        query = (seed_queries[0] if seed_queries else mission_prompt or "trending").strip()
+        return f"https://x.com/search?q={quote(query)}&f=live"
+
+    async def _get_browser_page_state(self, browser: BrowserSession) -> tuple[Any | None, str, str]:
+        try:
+            page = await browser.get_current_page()
+            if page is None:
+                return None, "", ""
+            page_url = await page.get_url()
+            page_title = await page.get_title()
+            return page, str(page_url or ""), str(page_title or "")
+        except Exception:
+            return None, "", ""
+
+    async def _is_x_auth_issue(self, page: Any, current_url: str | None = None) -> bool:
+        current_url = (current_url or await page.get_url() or "").strip()
+        if is_x_auth_flow_url(current_url):
+            return True
+
+        try:
+            has_login_inputs = await page.evaluate(
+                """() => Boolean(
+                    document.querySelector(
+                        'input[autocomplete="username"], input[name="password"], input[type="password"], input[data-testid="ocfEnterTextTextInput"]'
+                    )
+                )"""
+            )
+            if str(has_login_inputs).lower() == "true":
+                return True
+        except Exception:
+            pass
+
+        body_excerpt = (await self._get_x_body_excerpt(page)).lower()
+        return any(
+            marker in body_excerpt
+            for marker in (
+                "sign in to x",
+                "forgot password",
+                "enter your password",
+                "enter your phone number or email address",
+                "don't have an account",
+                "create account",
+                "reset your password",
+            )
+        )
+
+    async def _is_x_session_ready(self, page: Any) -> bool:
+        current_url = (await page.get_url() or "").strip()
+        if not current_url or is_x_auth_flow_url(current_url):
+            return False
+
+        if "x.com" not in current_url and "twitter.com" not in current_url:
+            return False
+
+        try:
+            has_logged_in_nav = await page.evaluate(
+                """() => Boolean(
+                    document.querySelector(
+                        '[data-testid="AppTabBar_Home_Link"], [data-testid="SideNav_NewTweet_Button"], nav a[href="/home"], a[href="/compose/post"]'
+                    )
+                )"""
+            )
+            if str(has_logged_in_nav).lower() == "true":
+                return True
+        except Exception:
+            pass
+
+        if await self._is_x_auth_issue(page, current_url):
+            return False
+
+        path = (urlparse(current_url).path or "/").lower()
+        return path == "/home" or path.startswith("/search") or path.startswith("/compose/")
+
+    async def _recover_x_session(self, browser: BrowserSession, spec: AgentSpec, seed_url: str | None = None) -> bool:
+        if not await self._login_to_x(browser, spec):
+            return False
+
+        page, _, _ = await self._get_browser_page_state(browser)
+        if page is None:
+            return False
+
+        if seed_url:
+            try:
+                await page.goto(seed_url)
+                await asyncio.sleep(4)
+            except Exception:
+                pass
+
+        return await self._is_x_session_ready(page)
+
+    async def _login_to_x(self, browser: BrowserSession, spec: AgentSpec) -> bool:
+        """Auto-login to X using env credentials and the browser-use CDP session."""
+        x_username = os.getenv("X_USERNAME", "").strip()
+        x_password = os.getenv("X_PASSWORD", "").strip()
+        x_verification_value = (os.getenv("X_EMAIL_OR_PHONE") or x_username).strip()
+        if not x_username or not x_password:
+            print(f"[agent {spec.agent_id}] X_USERNAME/X_PASSWORD not set, skipping X login")
+            return False
+        try:
+            print(f"[agent {spec.agent_id}] Logging into X using configured env credentials...")
+            page = await browser.get_current_page()
+            if page is None:
+                page = await browser.new_page()
+
+            await page.goto("https://x.com/i/flow/login")
+            await asyncio.sleep(5)
+
+            current_url = await page.get_url()
+            if is_authenticated_x_url(current_url):
+                print(f"[agent {spec.agent_id}] X already logged in")
+                return True
+
+            username_selectors = ['input[autocomplete="username"]', 'input[name="text"]', 'input']
+            verify_selectors = ['input[data-testid="ocfEnterTextTextInput"]']
+            password_selectors = ['input[name="password"]', 'input[type="password"]']
+
+            if not await self._wait_for_x_inputs_ready(page, username_selectors):
+                print(f"[agent {spec.agent_id}] Username input did not finish rendering on X login page")
+                return False
+
+            for _ in range(10):
+                typed_username = await self._set_x_input_value(
+                    page,
+                    username_selectors,
+                    x_username,
+                )
+                await asyncio.sleep(0.75)
+                persisted_username = await self._read_x_input_value(page, username_selectors)
+                if typed_username and persisted_username == x_username:
+                    break
+                await asyncio.sleep(1)
+            else:
+                print(f"[agent {spec.agent_id}] Username input not found on X login page")
+                return False
+            await asyncio.sleep(0.5)
+            if not await self._click_x_button_until(page, {"Next"}):
+                print(f"[agent {spec.agent_id}] Next button not clickable on X login page")
+                return False
+            await asyncio.sleep(3)
+
+            if await self._wait_for_x_inputs_ready(page, verify_selectors, timeout_seconds=5.0):
+                print(f"[agent {spec.agent_id}] Verification prompt detected — entering email/phone fallback...")
+                for _ in range(5):
+                    typed_verification = await self._set_x_input_value(
+                        page,
+                        verify_selectors,
+                        x_verification_value,
+                    )
+                    await asyncio.sleep(0.75)
+                    persisted_verification = await self._read_x_input_value(page, verify_selectors)
+                    if typed_verification and persisted_verification == x_verification_value:
+                        break
+                    await asyncio.sleep(1)
+                else:
+                    return False
+                await asyncio.sleep(0.5)
+                if not await self._click_x_button_until(page, {"Next"}):
+                    print(f"[agent {spec.agent_id}] Next button not clickable on X verification screen")
+                    return False
+                await asyncio.sleep(3)
+
+            if not await self._wait_for_x_inputs_ready(page, password_selectors, timeout_seconds=15.0):
+                body_excerpt = await self._get_x_body_excerpt(page)
+                print(f"[agent {spec.agent_id}] Password input not ready on X login page — body: {body_excerpt}")
+                return False
+
+            for _ in range(5):
+                typed_password = await self._set_x_input_value(
+                    page,
+                    password_selectors,
+                    x_password,
+                )
+                await asyncio.sleep(0.75)
+                persisted_password = await self._read_x_input_value(page, password_selectors)
+                if typed_password and persisted_password == x_password:
+                    await asyncio.sleep(0.5)
+                    break
+                await asyncio.sleep(2)
+            else:
+                body_excerpt = await self._get_x_body_excerpt(page)
+                print(f"[agent {spec.agent_id}] Password input not found on X login page — body: {body_excerpt}")
+                return False
+
+            if not await self._click_x_button_until(page, {"Log in", "Login"}):
+                print(f"[agent {spec.agent_id}] Log in button not clickable on X password screen")
+                return False
+            await asyncio.sleep(6)
+            current_url = await page.get_url()
+            if not await self._is_x_session_ready(page):
+                await page.goto("https://x.com/home")
+                await asyncio.sleep(4)
+                current_url = await page.get_url()
+
+            ok = await self._is_x_session_ready(page)
+            print(f"[agent {spec.agent_id}] X login {'successful' if ok else 'failed'} — URL: {current_url}")
+            return ok
+        except Exception as exc:
+            print(f"[agent {spec.agent_id}] X login failed: {exc}")
+            return False
+
+    async def _assist_x_login(self, browser: BrowserSession, spec: AgentSpec) -> None:
+        """Best-effort helper for React-driven X login fields during early agent steps."""
+        try:
+            page = await browser.get_current_page()
+            if page is None:
+                return
+            x_username = os.getenv("X_USERNAME", "").strip()
+            x_verification_value = (os.getenv("X_EMAIL_OR_PHONE") or x_username).strip()
+            if not x_username:
+                return
+
+            current_url = await page.get_url()
+            if "flow/login" not in current_url and "login" not in current_url:
+                return
+
+            await page.evaluate(f"""
+                (() => {{
+                    const el = document.querySelector('input[autocomplete="username"], input[name="text"]');
+                    if (el && !el.value) {{
+                        const nativeSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value'
+                        ).set;
+                        nativeSetter.call(el, {x_username!r});
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }})()
+            """)
+
+            await page.evaluate(f"""
+                (() => {{
+                    const el = document.querySelector('input[data-testid="ocfEnterTextTextInput"]');
+                    if (el && !el.value) {{
+                        const nativeSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value'
+                        ).set;
+                        nativeSetter.call(el, {x_verification_value!r});
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }})()
+            """)
+        except Exception:
+            pass
+
+    async def _set_x_input_value(self, page: Any, selectors: list[str], value: str) -> bool:
+        selector_list = json.dumps(selectors)
+        value_json = json.dumps(value)
+        result = await page.evaluate(
+            f"""() => {{
+                const selectors = {selector_list};
+                const value = {value_json};
+                const target = selectors
+                    .map((selector) => document.querySelector(selector))
+                    .find(Boolean);
+                if (!target) {{
+                    return '';
+                }}
+
+                target.focus();
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype,
+                    'value'
+                )?.set;
+                if (!nativeSetter) {{
+                    return '';
+                }}
+
+                nativeSetter.call(target, value);
+                target.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                target.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return target.value || '';
+            }}"""
+        )
+        return str(result or "").strip() == value
+
+    async def _read_x_input_value(self, page: Any, selectors: list[str]) -> str:
+        selector_list = json.dumps(selectors)
+        result = await page.evaluate(
+            f"""() => {{
+                const selectors = {selector_list};
+                const target = selectors
+                    .map((selector) => document.querySelector(selector))
+                    .find(Boolean);
+                return target?.value || '';
+            }}"""
+        )
+        return str(result or "").strip()
+
+    async def _wait_for_x_inputs_ready(self, page: Any, selectors: list[str], *, timeout_seconds: float = 20.0) -> bool:
+        selector_list = json.dumps(selectors)
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            ready = await page.evaluate(
+                f"""() => {{
+                    const selectors = {selector_list};
+                    const hasTarget = selectors.some((selector) => Boolean(document.querySelector(selector)));
+                    const bodyText = (document.body?.innerText || '').trim();
+                    return hasTarget && bodyText.length > 0;
+                }}"""
+            )
+            if str(ready).lower() == "true":
+                return True
+            await asyncio.sleep(1)
+        return False
+
+    async def _click_x_button(self, page: Any, labels: set[str]) -> bool:
+        label_list = sorted(labels)
+        label_json = json.dumps(label_list)
+        clicked = await page.evaluate(
+            f"""() => {{
+                const normalized = new Set({label_json}.map((label) => label.toLowerCase()));
+                const candidates = Array.from(document.querySelectorAll('button, div[role="button"]'));
+                for (const el of candidates) {{
+                    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                    if (!text || !normalized.has(text)) continue;
+                    if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+                    el.click();
+                    return true;
+                }}
+                return false;
+            }}"""
+        )
+        return str(clicked).lower() == "true"
+
+    async def _click_x_button_until(self, page: Any, labels: set[str], *, timeout_seconds: float = 10.0) -> bool:
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            if await self._click_x_button(page, labels):
+                return True
+            await asyncio.sleep(1)
+        return False
+
+    async def _get_x_body_excerpt(self, page: Any) -> str:
+        result = await page.evaluate(
+            """() => (document.body?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 600)"""
+        )
+        return str(result or "").strip()
 
     async def _take_agent_screenshot(self, browser: BrowserSession, spec: AgentSpec) -> str | None:
         try:
@@ -2287,105 +2908,98 @@ class MasterBuildOrchestrator:
     ) -> str:
         """Build the task description for a browser-use Agent with business-model focus."""
 
+        platform_objectives = {
+            "youtube": "Find what gets attention, what language earns engagement, and what viewers openly want or dislike.",
+            "x": "Find live urgency, requests, objections, and product conversations from operators, founders, and early adopters.",
+            "reddit": "Find detailed pain points, DIY workarounds, willingness to pay, and the shape of the community need.",
+            "substack": "Find category narratives, market maps, pricing logic, and expert theses that explain where the market is heading.",
+        }
+
         # Platform-specific deep-navigation instructions + direct search URLs
         platform_instructions: dict[str, dict[str, str]] = {
             "youtube": {
                 "search_url": f"https://www.youtube.com/results?search_query={seed_queries[0].replace(' ', '+') if seed_queries else 'trending'}",
                 "guide": (
-                    "You are a business researcher browsing YouTube like a real person would.\n\n"
-                    "STEP-BY-STEP ACTIONS (follow this exactly):\n\n"
-                    "PHASE 1 — SEARCH & SCAN:\n"
-                    "1. You will land on a YouTube search results page. Wait for it to fully load.\n"
-                    "2. Scroll down SLOWLY 2-3 times to see more results. Read all the video titles visible.\n"
-                    "3. Pick the MOST RELEVANT video to the business mission — click its thumbnail or title.\n\n"
-                    "PHASE 2 — DEEP DIVE (repeat for 5-8 videos):\n"
-                    "4. On the video page: scroll down to see the description box. Click 'Show more' if visible.\n"
-                    "5. Read the FULL video title, view count, like count, and upload date.\n"
-                    "6. Read the description — look for: pricing, product links, affiliate links, business models.\n"
-                    "7. Scroll to the comments section. Read the top 5-8 comments. Look for:\n"
-                    "   - Complaints ('this doesn't work', 'too expensive', 'I wish...')\n"
-                    "   - Questions ('how do I...', 'where can I...')\n"
-                    "   - Success stories ('I made $X doing this')\n"
-                    "8. Click the channel name to see subscriber count. Then press Back.\n"
-                    "9. Click the NEXT relevant video from search results.\n\n"
-                    "PHASE 3 — SECOND QUERY:\n"
-                    "10. After 3-4 videos, click the YouTube search bar, clear it, type the SECOND seed query, press Enter.\n"
-                    "11. Repeat Phase 2 for 3-4 more videos.\n\n"
-                    "WHAT TO EXTRACT (be specific — exact numbers):\n"
-                    "- View count (e.g. '1.2M views') and like count\n"
-                    "- Channel subscriber count (e.g. '450K subscribers')\n"
-                    "- Revenue/pricing mentioned in description or video\n"
-                    "- Top pain points from comments (quote them verbatim)\n"
-                    "- Business model insights (how creators monetize this niche)\n\n"
-                    "IMPORTANT RULES:\n"
-                    "- Do NOT stay on the search results page. You MUST click into actual videos.\n"
-                    "- Do NOT just read titles from search results — you must open videos and scroll.\n"
-                    "- If YouTube shows a consent/cookie popup, click 'Accept all' or 'Reject all'.\n"
-                    "- If asked to sign in, click 'No thanks' or press Escape and continue.\n"
-                    "- If a page loads blank or empty, wait 5 seconds then try navigating again."
+                    "Work YouTube like a curious operator doing audience research, not like a bot scraping titles.\n\n"
+                    "How to move naturally:\n"
+                    "- Use the first query to spot the strongest-looking videos, then open them quickly instead of hovering on the results page.\n"
+                    "- Once inside a worthwhile video, inspect the title, upload recency, view count, likes, channel positioning, description links, pinned comments, and top comments.\n"
+                    "- If a creator mentions tools, pricing, templates, affiliates, communities, or revenue numbers, capture those specifics.\n"
+                    "- When the same promise, complaint, or workflow keeps appearing, follow it into related videos or the creator's channel to confirm the pattern.\n"
+                    "- After exhausting the first angle, switch to the next seed query and repeat.\n\n"
+                    "Evidence to capture:\n"
+                    "- Exact numbers: views, likes, subscriber count, and timing when visible.\n"
+                    "- Verbatim audience language from comments or descriptions.\n"
+                    "- Repeated hooks, thumbnails, objections, and monetization patterns.\n"
+                    "- Clear hints about who the buyer or power user is.\n\n"
+                    "Recovery rules:\n"
+                    "- If YouTube shows a cookie or consent popup, dismiss it and continue.\n"
+                    "- If sign-in is requested, back out or skip it and keep researching publicly visible content.\n"
+                    "- If a page stalls, wait briefly, scroll once, then try the next relevant result."
                 ),
             },
             "x": {
                 "search_url": f"https://x.com/search?q={seed_queries[0].replace(' ', '%20') if seed_queries else 'trending'}&f=live",
                 "guide": (
-                    "You are researching X (Twitter) for pain points and market signals.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above (filters to live/latest tweets).\n"
-                    "2. Scroll to see at least 10–15 tweets on the search results page.\n"
-                    "3. Click into 4–5 tweet threads that look like they contain complaints, "
-                    "   product discussions, or 'I wish someone would build X' statements.\n"
-                    "4. On each thread: read the full thread including replies. Note like/retweet/reply counts.\n"
-                    "5. Click on 2–3 account profiles to check follower count and what they sell/promote.\n"
-                    "6. Search for a second seed query using the search bar.\n\n"
-                    "WHAT TO EXTRACT:\n"
-                    "- Direct quotes of pain points (exact wording)\n"
-                    "- Products being complained about or praised (with engagement counts)\n"
-                    "- Accounts with 10k+ followers who are influencers in this space\n"
-                    "- Threads where people are asking for solutions that don't exist yet\n\n"
-                    "BOT EVASION: X.com allows searching without login. If asked to log in, "
-                    "close the modal (press Escape or click X) and continue browsing the search results."
+                    "Work X like a fast-moving operator scanning live demand.\n\n"
+                    "The runtime will attempt X login before your browsing starts.\n"
+                    "Do NOT invent or type credentials yourself.\n"
+                    "If a login or verification screen still appears, refresh once, wait for the runtime helper, and continue only after X loads normally.\n\n"
+                    "How to move naturally:\n"
+                    "- Start in Live search, but do not stay there once you find a promising post.\n"
+                    "- Open high-signal threads from founders, operators, practitioners, customers, or critics.\n"
+                    "- Read the original post, then inspect the best replies, quote tweets, and the author's nearby posts when they sharpen the signal.\n"
+                    "- Cover multiple angles: explicit requests, complaints about existing tools, launch feedback, workflow screenshots, and pricing reactions.\n"
+                    "- Use at least two seed queries and gather 5-7 strong threads, not just 1-2 hot takes.\n\n"
+                    "Evidence to capture:\n"
+                    "- Likes, replies, reposts, and any visible bookmarks or views.\n"
+                    "- Exact language people use when asking for help, comparing tools, or describing pain.\n"
+                    "- Who is speaking: founder, operator, marketer, PM, engineer, creator, buyer.\n"
+                    "- References to budgets, switching friction, urgency, or incumbent tools.\n\n"
+                    "Recovery rules:\n"
+                    "- Never use forgot-password, sign-up, or Apple/Google sign-in flows.\n"
+                    "- If a thread fails to load, back out and pick the next relevant post.\n"
+                    "- If search quality drops, switch queries rather than scrolling forever."
                 ),
             },
             "reddit": {
                 "search_url": f"https://www.reddit.com/search/?q={seed_queries[0].replace(' ', '+') if seed_queries else 'help'}&sort=top&t=year",
                 "guide": (
-                    "You are researching Reddit for unmet needs and market gaps.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above (sorts by top posts in the past year).\n"
-                    "2. Click into the 6–8 most upvoted posts from results.\n"
-                    "3. On each post: read the FULL body text, then scroll and read the top 8–10 comments. "
-                    "   Note the post score (upvotes) and comment count.\n"
-                    "4. Check the subreddit name — click it to see the subscriber count and community description.\n"
-                    "5. After the first query, search for the second seed query.\n\n"
-                    "WHAT TO EXTRACT:\n"
-                    "- Post score and comment count (demand signal strength)\n"
-                    "- Subreddit subscriber count (market size proxy)\n"
-                    "- Direct quotes like 'I'd pay for', 'take my money', 'I wish'\n"
-                    "- DIY workarounds people have built (signals unmet commercial need)\n"
-                    "- Names of tools/products being recommended or criticised\n\n"
-                    "BOT EVASION: Reddit is mostly accessible without login. If a login wall appears, "
-                    "scroll past it — Reddit lazy-loads content. Try appending .json to the URL for raw data."
+                    "Work Reddit like a patient researcher listening for detailed pain.\n\n"
+                    "How to move naturally:\n"
+                    "- Start from high-signal search results, then open the strongest threads across at least two relevant subreddits or query angles.\n"
+                    "- Read the original post carefully before diving into comments.\n"
+                    "- Spend time with both the top comments and the more skeptical or tactical replies so you understand consensus and disagreement.\n"
+                    "- Check the subreddit context when it matters: subscriber size, community description, and who this audience seems to be.\n"
+                    "- Prefer posts where people describe workflows, failed attempts, tools they stitched together, or money they already spend.\n\n"
+                    "Evidence to capture:\n"
+                    "- Post score, comment count, and subreddit size.\n"
+                    "- Verbatim willingness-to-pay or frustration language.\n"
+                    "- DIY scripts, spreadsheets, automations, or manual workarounds.\n"
+                    "- Names of tools that are recommended, rejected, or only partially solve the problem.\n\n"
+                    "Recovery rules:\n"
+                    "- If a login wall appears, try scrolling, opening the thread directly, or using the raw content that still loads.\n"
+                    "- If a thread is low-signal, leave quickly and move to the next one."
                 ),
             },
             "substack": {
                 "search_url": f"https://substack.com/search?query={seed_queries[0].replace(' ', '%20') if seed_queries else 'trends'}",
                 "guide": (
-                    "You are researching Substack for industry narratives and market intelligence.\n\n"
-                    "NAVIGATION PROTOCOL:\n"
-                    "1. Start at the search URL above.\n"
-                    "2. Click into 5–7 newsletter posts from the results.\n"
-                    "3. On each article: read the FULL article (scroll to the end), note the publication name "
-                    "   and subscriber count if visible. Note any pricing tiers mentioned.\n"
-                    "4. Click the newsletter/publication name to see its subscriber count and about page.\n"
-                    "5. Look for articles with large comment sections — click into 2–3 comments.\n\n"
-                    "WHAT TO EXTRACT:\n"
-                    "- Market size estimates and revenue figures quoted by authors\n"
-                    "- Competitor names and their stated pricing / positioning\n"
-                    "- Expert predictions and trend calls (with publication name and sub count)\n"
-                    "- Business model breakdowns (how companies make money in this space)\n"
-                    "- Reader comments that reveal unmet needs or strong opinions\n\n"
-                    "BOT EVASION: Substack is mostly open. If a paywall appears on an article, "
-                    "read the visible portion and move to the next result."
+                    "Work Substack like a category analyst collecting market narratives.\n\n"
+                    "How to move naturally:\n"
+                    "- Open essays and newsletters that look opinionated, analytical, or operator-focused, not just generic trend recaps.\n"
+                    "- Read enough of each post to understand the thesis, supporting evidence, and which companies or workflows are being highlighted.\n"
+                    "- Check the publication or author context when useful: subscriber count, pricing tiers, about page, and positioning.\n"
+                    "- Use the first seed query to map the category, then the next seed query to pressure-test pricing, competition, or a narrower workflow.\n"
+                    "- If comments are active, read a few to see how smart readers react or what they disagree with.\n\n"
+                    "Evidence to capture:\n"
+                    "- Market-size claims, revenue figures, or growth claims.\n"
+                    "- Competitor names, pricing, category language, and positioning.\n"
+                    "- Strong expert predictions or strategic angles worth turning into product direction.\n"
+                    "- Reader comments that expose unmet needs, skepticism, or demand.\n\n"
+                    "Recovery rules:\n"
+                    "- If a post is partially paywalled, use the visible section, note the thesis, and move on.\n"
+                    "- Favor breadth across several strong publications over getting stuck on one essay."
                 ),
             },
         }
@@ -2407,24 +3021,26 @@ class MasterBuildOrchestrator:
         ) or "- No curated links available — use the DIRECT SEARCH URL below."
 
         return (
-            f"You are Agent {spec.agent_id} ({spec.name}), a {spec.role} agent browsing {spec.platform}.\n\n"
+            f"You are Agent {spec.agent_id} ({spec.name}), the {spec.platform} specialist in a live research swarm.\n\n"
             f"MISSION: {mission_prompt}\n\n"
+            f"YOUR PLATFORM-SPECIFIC OBJECTIVE:\n- {platform_objectives.get(spec.platform, 'Find commercially useful signal that this market is worth building for.')}\n\n"
             f"SEED QUERIES:\n{queries_text}\n\n"
             f"DIRECT SEARCH URL (start here if curated links are weak):\n{search_url}\n\n"
             f"CURATED LINKS TO TRY FIRST:\n{curated_text}\n\n"
+            f"COLLABORATION CONTEXT:\n"
+            f"- Treat the strategy and current business plan as steering, not a rigid script.\n"
+            f"- Use your platform to confirm, deepen, or challenge what the other agents seem to be finding.\n"
+            f"- Add signal that only {spec.platform} can reveal instead of duplicating shallow observations.\n\n"
             f"=== PLATFORM GUIDE ===\n{platform_guide}\n\n"
             f"CURRENT BUSINESS PLAN STATE:\n{bp_summary}\n\n"
             f"STRATEGY FROM ORCHESTRATOR:\n{strategy}\n\n"
-            f"=== EXECUTION RULES ===\n"
-            f"1. DO NOT stay on the homepage. Navigate INTO actual posts, videos, and threads.\n"
-            f"2. For EVERY page you visit: scroll down at least 3 times to load more content.\n"
-            f"3. Read descriptions, bodies, and top comments on every content page you open.\n"
-            f"4. Cover at least 6 distinct content pieces before finishing.\n"
-            f"5. If a page blocks you or shows a bot check: wait 3 seconds, scroll, try again.\n"
-            f"6. If completely blocked, navigate to the DIRECT SEARCH URL above as a fallback.\n"
-            f"7. Extract BUSINESS INTELLIGENCE: view counts, engagement metrics, pricing signals, "
-            f"   pain points quoted verbatim, monetisation patterns, audience sizes.\n"
-            f"8. Your findings feed a live business plan — be thorough and specific.\n"
+            f"DISCOVERY QUALITY BAR:\n"
+            f"- Navigate into real posts, videos, threads, or articles. Do not stop at surface-level search pages.\n"
+            f"- Cover at least 6 distinct content pieces unless the platform clearly blocks you.\n"
+            f"- For every worthwhile page, read beyond the headline: description/body text, comments/replies, and surrounding context.\n"
+            f"- Prefer concrete evidence over generic observations: metrics, quotes, pricing, workflow details, named competitors, audience descriptors.\n"
+            f"- If blocked, recover naturally: wait, scroll, back out, switch result, or return to the direct search URL.\n"
+            f"- Your output directly shapes a live business plan and a Lovable build brief, so gather signal with enough detail to make product decisions.\n"
         )
 
     async def _staggered_run_agent(self, delay: float, spec: AgentSpec, **kwargs) -> None:
@@ -2445,16 +3061,86 @@ class MasterBuildOrchestrator:
     ) -> None:
         last_preview_key: str | None = None
         browser: BrowserSession | None = None
+        x_watchdog_task: asyncio.Task[Any] | None = None
         step_count = 0
         primary_query = seed_queries[0] if seed_queries else mission_prompt
+        x_seed_url = self._build_x_search_url(seed_queries, mission_prompt) if spec.platform == "x" else None
+        x_reauth_lock = asyncio.Lock()
+
+        async def recover_x_session(reason: str) -> tuple[bool, str, str]:
+            if browser is None or x_seed_url is None:
+                return False, "", ""
+
+            async with x_reauth_lock:
+                page, current_url, current_title = await self._get_browser_page_state(browser)
+                if page is not None and not await self._is_x_auth_issue(page, current_url):
+                    return True, current_url, current_title
+
+                print(f"[agent {spec.agent_id}] Recovering X session ({reason})...")
+                recovered = await self._recover_x_session(browser, spec, x_seed_url)
+                _, current_url, current_title = await self._get_browser_page_state(browser)
+                return recovered, current_url, current_title
+
+        async def x_session_watchdog() -> None:
+            if x_seed_url is None:
+                return
+
+            while not self.stop_event.is_set():
+                try:
+                    if browser is None:
+                        await asyncio.sleep(2)
+                        continue
+
+                    page, page_url, page_title = await self._get_browser_page_state(browser)
+                    if page is None:
+                        await asyncio.sleep(2)
+                        continue
+
+                    if "x.com" not in page_url and "twitter.com" not in page_url:
+                        await asyncio.sleep(2)
+                        continue
+
+                    if await self._is_x_auth_issue(page, page_url):
+                        recovered, page_url, page_title = await recover_x_session("watchdog")
+                        if recovered:
+                            screenshot_path = await self._take_agent_screenshot(browser, spec)
+                            await self.preview_manager.publish(
+                                spec.agent_id,
+                                status="searching",
+                                title=page_title or "X session recovered",
+                                current_url=page_url,
+                                note="watchdog recovery",
+                                screenshot_path=screenshot_path,
+                            )
+                    await asyncio.sleep(2)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    print(f"[agent {spec.agent_id}] X watchdog error: {exc}")
+                    await asyncio.sleep(2)
 
         async def on_step_end(step_result):
             """Called after every browser-use Agent step — capture state and report."""
             nonlocal step_count, last_preview_key
             step_count += 1
             try:
-                page_url = await browser.get_current_page_url() or ""
-                page_title = await browser.get_current_page_title() or ""
+                page, page_url, page_title = await self._get_browser_page_state(browser)
+
+                if spec.platform == "x" and page is not None:
+                    if await self._is_x_auth_issue(page, page_url):
+                        await self.client.append_log(
+                            mission_id,
+                            agent_id=spec.agent_id,
+                            log_type="status",
+                            message=f"Re-authenticating X after auth flow redirect: {page_url[:120]}",
+                            metadata={"step": step_count, "url": page_url},
+                        )
+                        recovered, page_url, page_title = await recover_x_session(f"step {step_count}")
+                        page, page_url, page_title = await self._get_browser_page_state(browser)
+                        if page is None or not recovered or await self._is_x_auth_issue(page, page_url):
+                            raise asyncio.CancelledError("X session lost authenticated state")
+                    elif step_count <= 5:
+                        await self._assist_x_login(browser, spec)
                 screenshot_path = await self._take_agent_screenshot(browser, spec)
 
                 # Extract real page content for context and discovery summarisation
@@ -2500,7 +3186,14 @@ class MasterBuildOrchestrator:
                 # Create discovery for new URLs
                 if page_url and page_url not in _seen_urls:
                     _seen_urls.add(page_url)
-                    keywords, summary = await self.ai.summarize_discovery(mission_prompt, primary_query, page_title, page_url, page_content)
+                    keywords, summary = await self.ai.summarize_discovery(
+                        mission_prompt,
+                        primary_query,
+                        page_title,
+                        page_url,
+                        page_content,
+                        platform=spec.platform,
+                    )
                     if keywords and keywords != "fallback" and is_valid_platform_content_url(spec.platform, page_url) and summary.strip():
                         self.blackboard.appendleft(keywords)
                         agent_context.log_discovery(spec.agent_id, spec.platform, keywords, summary, page_url)
@@ -2540,10 +3233,52 @@ class MasterBuildOrchestrator:
         _seen_urls: set[str] = await self.client.get_all_discovered_urls(mission_id)
 
         try:
+            await self.preview_manager.publish(
+                spec.agent_id,
+                status="searching",
+                title="Launching local browser",
+                current_url="",
+                note="Preparing local browser-use session.",
+                screenshot_path=None,
+            )
+            await self.client.update_agent(
+                spec.agent_id,
+                mission_id=mission_id,
+                status="searching",
+                current_url="",
+                assignment=f"Launching {spec.platform} browser",
+                energy=100,
+                last_heartbeat=utc_now(),
+            )
+
             browser = build_local_browser_session(spec.agent_id, spec.platform, headless=self.headless)
+            await browser.start()
 
             # Inject stealth scripts on every new page to suppress automation signals
             await self._inject_stealth_scripts(browser)
+
+            if spec.platform == "x":
+                await self.preview_manager.publish(
+                    spec.agent_id,
+                    status="searching",
+                    title="Authenticating with X",
+                    current_url="https://x.com/i/flow/login",
+                    note="Signing into the local X session.",
+                    screenshot_path=None,
+                )
+                await self.client.update_agent(
+                    spec.agent_id,
+                    mission_id=mission_id,
+                    status="searching",
+                    current_url="https://x.com/i/flow/login",
+                    assignment="Authenticating with X",
+                    energy=100,
+                    last_heartbeat=utc_now(),
+                )
+                logged_in = await self._recover_x_session(browser, spec, x_seed_url)
+                if not logged_in:
+                    raise RuntimeError("X login did not reach an authenticated page")
+                x_watchdog_task = asyncio.create_task(x_session_watchdog())
 
             task_description = self._build_agent_task(spec, mission_prompt, seed_queries, curated_links)
             llm, model_label = self._create_llm_for_platform(spec.platform)
@@ -2593,6 +3328,9 @@ class MasterBuildOrchestrator:
             )
             agent_context.log_agent_action(spec.agent_id, "error", str(error)[:200])
         finally:
+            if x_watchdog_task is not None:
+                x_watchdog_task.cancel()
+                await asyncio.gather(x_watchdog_task, return_exceptions=True)
             if browser is not None:
                 try:
                     await browser.stop()
@@ -2626,3 +3364,7 @@ async def run_masterbuild() -> None:
         await asyncio.gather(watcher, return_exceptions=True)
     finally:
         await orchestrator.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(run_masterbuild())

@@ -455,16 +455,25 @@ export function useMasterBuildDashboard() {
   const [isCreatingMission, setIsCreatingMission] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reloadTokenRef = useRef(0);
+  const loadInFlightRef = useRef(false);
+  const reloadQueuedRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
 
   const configError = useMemo(() => getInsforgeConfigError(), []);
 
   const loadDashboard = useCallback(async () => {
+    if (loadInFlightRef.current) {
+      reloadQueuedRef.current = true;
+      return;
+    }
+
     if (!hasInsforgeConfig) {
       setError(configError);
       setIsLoading(false);
       return;
     }
 
+    loadInFlightRef.current = true;
     const reloadToken = reloadTokenRef.current + 1;
     reloadTokenRef.current = reloadToken;
 
@@ -517,8 +526,36 @@ export function useMasterBuildDashboard() {
         caughtError instanceof Error ? caughtError.message : "Failed to load MasterBuild data from InsForge.";
       setError(message);
       setIsLoading(false);
+    } finally {
+      loadInFlightRef.current = false;
+      if (reloadQueuedRef.current) {
+        reloadQueuedRef.current = false;
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => {
+            void loadDashboard();
+          }, 250);
+        } else {
+          void loadDashboard();
+        }
+      }
     }
   }, [configError]);
+
+  const scheduleDashboardReload = useCallback(() => {
+    if (typeof window === "undefined") {
+      void loadDashboard();
+      return;
+    }
+
+    if (refreshTimerRef.current !== null) {
+      return;
+    }
+
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void loadDashboard();
+    }, 400);
+  }, [loadDashboard]);
 
   useEffect(() => {
     void loadDashboard();
@@ -533,7 +570,7 @@ export function useMasterBuildDashboard() {
 
     const refresh = () => {
       if (!isMounted) return;
-      void loadDashboard();
+      scheduleDashboardReload();
     };
 
     const handleDisconnect = () => {
@@ -569,8 +606,12 @@ export function useMasterBuildDashboard() {
       for (const eventName of REALTIME_EVENTS) {
         insforge.realtime.off(eventName, refresh);
       }
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
-  }, [loadDashboard]);
+  }, [loadDashboard, scheduleDashboardReload]);
 
   const createMission = useCallback(
     async (prompt: string) => {
@@ -611,11 +652,11 @@ export function useMasterBuildDashboard() {
 
       // Also directly mark mission as stopping so UI updates immediately
       if (latestMission?.id) {
-        await insforge.database.from("missions").update({ status: "stopping" }).eq("id", latestMission.id).catch(() => {});
+        try { await insforge.database.from("missions").update({ status: "stopping" }).eq("id", latestMission.id); } catch {}
       }
 
       // Mark all agents as stopped in DB
-      await insforge.database.from("agents").update({ status: "stopped", energy: 0 }).neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+      try { await insforge.database.from("agents").update({ status: "stopped", energy: 0 }).neq("id", "00000000-0000-0000-0000-000000000000"); } catch {}
 
       // Reload dashboard to reflect stopped state
       await loadDashboard();
@@ -630,29 +671,34 @@ export function useMasterBuildDashboard() {
     try {
       // 1. Send stop command to kill browser sessions
       if (latestMission?.id) {
-        await insforge.database.from("control_commands").insert([
-          { mission_id: latestMission.id, command: "stop_all", payload: { source: "reset" }, status: "pending" }
-        ]).catch(() => {});
+        try {
+          await insforge.database.from("control_commands").insert([
+            { mission_id: latestMission.id, command: "stop_all", payload: { source: "reset" }, status: "pending" }
+          ]);
+        } catch {}
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
 
       // 2. Try the RPC first
-      const rpcResult = await insforge.database.rpc("reset_masterbuild").catch(() => null);
+      let rpcResult: Awaited<ReturnType<typeof insforge.database.rpc>> | null = null;
+      try { rpcResult = await insforge.database.rpc("reset_masterbuild"); } catch {}
 
       // 3. If RPC failed or doesn't exist, manually wipe tables
       if (!rpcResult || rpcResult.error) {
         const tables = ["logs", "discoveries", "signals", "control_commands", "builder_outputs", "agent_memory"];
         for (const table of tables) {
-          await insforge.database.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+          try { await insforge.database.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000"); } catch {}
         }
         // Reset agents to idle
-        await insforge.database.from("agents").update({
-          status: "idle", current_url: "", assignment: "", energy: 100,
-          preview_bucket: null, preview_key: null, preview_updated_at: null
-        }).neq("id", "00000000-0000-0000-0000-000000000000").catch(() => {});
+        try {
+          await insforge.database.from("agents").update({
+            status: "idle", current_url: "", assignment: "", energy: 100,
+            preview_bucket: null, preview_key: null, preview_updated_at: null
+          }).neq("id", "00000000-0000-0000-0000-000000000000");
+        } catch {}
         // Mark missions stopped
         if (latestMission?.id) {
-          await insforge.database.from("missions").update({ status: "stopped" }).eq("id", latestMission.id).catch(() => {});
+          try { await insforge.database.from("missions").update({ status: "stopped" }).eq("id", latestMission.id); } catch {}
         }
       }
 
