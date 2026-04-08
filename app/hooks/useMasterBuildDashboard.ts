@@ -103,10 +103,75 @@ interface MissionRecord {
 
 const REALTIME_CHANNELS = [
   "missions", "agents", "discoveries", "logs", "signals",
-  "agent_memory", "agent_thoughts", "business_plans", "builder_outputs"
+  "agent_memory", "agent_thoughts", "business_plans"
 ] as const;
 const REALTIME_EVENTS = REALTIME_CHANNELS.map((channel) => `${channel}_changed`);
 let realtimeSetupPromise: Promise<void> | null = null;
+
+async function callMissionControlRoute<T>(path: string, body: Record<string, unknown>) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    credentials: "same-origin",
+    cache: "no-store",
+    body: JSON.stringify(body)
+  });
+
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const error =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: unknown }).error ?? "")
+        : "";
+    throw new Error(error || `Request failed with status ${response.status}.`);
+  }
+
+  return payload as T;
+}
+
+interface DashboardSnapshotPayload {
+  mission: Record<string, unknown> | null;
+  agents: unknown;
+  discoveries: unknown;
+  logs: unknown;
+  signals: unknown;
+  thoughts: unknown;
+  memory: unknown;
+  businessPlans: unknown;
+}
+
+async function fetchDashboardSnapshot() {
+  const response = await fetch("/api/dashboard", {
+    method: "GET",
+    credentials: "same-origin",
+    cache: "no-store"
+  });
+
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const error =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error?: unknown }).error ?? "")
+        : "";
+    throw new Error(error || `Request failed with status ${response.status}.`);
+  }
+
+  return payload as DashboardSnapshotPayload;
+}
 
 async function ensureRealtimeReady() {
   if (realtimeSetupPromise) {
@@ -478,46 +543,21 @@ export function useMasterBuildDashboard() {
     reloadTokenRef.current = reloadToken;
 
     try {
-      const [
-        missionResult, agentResult, discoveryResult, logResult, signalResult,
-        thoughtsResult, memoryResult, businessPlanResult,
-      ] = await Promise.all([
-        insforge.database.from("missions").select("*").order("created_at", { ascending: false }).limit(1).maybeSingle(),
-        insforge.database.from("agents").select("*").order("agent_id", { ascending: true }),
-        insforge.database.from("discoveries").select("*").order("created_at", { ascending: false }).limit(100),
-        insforge.database.from("logs").select("*").order("created_at", { ascending: false }).limit(60),
-        insforge.database.from("signals").select("*").order("created_at", { ascending: false }).limit(60),
-        insforge.database.from("agent_thoughts").select("*").order("created_at", { ascending: false }).limit(100),
-        insforge.database.from("agent_memory").select("*").order("filename", { ascending: true }),
-        insforge.database.from("business_plans").select("*").order("created_at", { ascending: false }).limit(20),
-      ]);
-
-      const firstError =
-        missionResult.error ??
-        agentResult.error ??
-        discoveryResult.error ??
-        logResult.error ??
-        signalResult.error;
-      // Don't fail on new tables not yet created — they are additive
-      // thoughtsResult.error, memoryResult.error, businessPlanResult.error are non-fatal
-
-      if (firstError) {
-        throw firstError;
-      }
+      const snapshot = await fetchDashboardSnapshot();
 
       if (reloadToken !== reloadTokenRef.current) {
         return;
       }
 
       startTransition(() => {
-        setLatestMission(normalizeMission(missionResult.data as Record<string, unknown> | null));
-        setAgents(normalizeAgents(agentResult.data));
-        setDiscoveries(normalizeDiscoveries(discoveryResult.data));
-        setLogs(normalizeLogs(logResult.data));
-        setSignals(normalizeSignals(signalResult.data));
-        if (!thoughtsResult.error) setThoughts(normalizeThoughts(thoughtsResult.data));
-        if (!memoryResult.error) setMemory(normalizeMemory(memoryResult.data));
-        if (!businessPlanResult.error) setBusinessPlans(normalizeBusinessPlans(businessPlanResult.data));
+        setLatestMission(normalizeMission(snapshot.mission));
+        setAgents(normalizeAgents(snapshot.agents));
+        setDiscoveries(normalizeDiscoveries(snapshot.discoveries));
+        setLogs(normalizeLogs(snapshot.logs));
+        setSignals(normalizeSignals(snapshot.signals));
+        setThoughts(normalizeThoughts(snapshot.thoughts));
+        setMemory(normalizeMemory(snapshot.memory));
+        setBusinessPlans(normalizeBusinessPlans(snapshot.businessPlans));
         setError(null);
         setIsLoading(false);
       });
@@ -619,13 +659,9 @@ export function useMasterBuildDashboard() {
       setIsCreatingMission(true);
 
       try {
-        const result = await insforge.database.rpc("start_masterbuild_mission", {
-          mission_prompt: prompt.trim()
+        await callMissionControlRoute("/api/mission/create", {
+          prompt: prompt.trim()
         });
-
-        if (result.error) {
-          throw result.error;
-        }
 
         await loadDashboard();
       } catch (caughtError) {
@@ -640,25 +676,9 @@ export function useMasterBuildDashboard() {
 
   const stopAll = useCallback(async () => {
     try {
-      // Insert stop command for orchestrator to pick up
-      await insforge.database.from("control_commands").insert([
-        {
-          mission_id: latestMission?.id ?? null,
-          command: "stop_all",
-          payload: { source: "ui" },
-          status: "pending"
-        }
-      ]);
-
-      // Also directly mark mission as stopping so UI updates immediately
-      if (latestMission?.id) {
-        try { await insforge.database.from("missions").update({ status: "stopping" }).eq("id", latestMission.id); } catch {}
-      }
-
-      // Mark all agents as stopped in DB
-      try { await insforge.database.from("agents").update({ status: "stopped", energy: 0 }).neq("id", "00000000-0000-0000-0000-000000000000"); } catch {}
-
-      // Reload dashboard to reflect stopped state
+      await callMissionControlRoute("/api/mission/stop", {
+        missionId: latestMission?.id ?? null
+      });
       await loadDashboard();
     } catch (caughtError) {
       const message =
@@ -669,40 +689,10 @@ export function useMasterBuildDashboard() {
 
   const resetAll = useCallback(async () => {
     try {
-      // 1. Send stop command to kill browser sessions
-      if (latestMission?.id) {
-        try {
-          await insforge.database.from("control_commands").insert([
-            { mission_id: latestMission.id, command: "stop_all", payload: { source: "reset" }, status: "pending" }
-          ]);
-        } catch {}
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
+      await callMissionControlRoute("/api/mission/reset", {
+        missionId: latestMission?.id ?? null
+      });
 
-      // 2. Try the RPC first
-      let rpcResult: Awaited<ReturnType<typeof insforge.database.rpc>> | null = null;
-      try { rpcResult = await insforge.database.rpc("reset_masterbuild"); } catch {}
-
-      // 3. If RPC failed or doesn't exist, manually wipe tables
-      if (!rpcResult || rpcResult.error) {
-        const tables = ["logs", "discoveries", "signals", "control_commands", "builder_outputs", "agent_memory"];
-        for (const table of tables) {
-          try { await insforge.database.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000"); } catch {}
-        }
-        // Reset agents to idle
-        try {
-          await insforge.database.from("agents").update({
-            status: "idle", current_url: "", assignment: "", energy: 100,
-            preview_bucket: null, preview_key: null, preview_updated_at: null
-          }).neq("id", "00000000-0000-0000-0000-000000000000");
-        } catch {}
-        // Mark missions stopped
-        if (latestMission?.id) {
-          try { await insforge.database.from("missions").update({ status: "stopped" }).eq("id", latestMission.id); } catch {}
-        }
-      }
-
-      // 4. Clear frontend state immediately
       setLatestMission(null);
       setAgents([]);
       setDiscoveries([]);
@@ -713,7 +703,6 @@ export function useMasterBuildDashboard() {
       setBusinessPlans([]);
       setError(null);
 
-      // 5. Reload fresh state
       await loadDashboard();
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Failed to reset MasterBuild.";

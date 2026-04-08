@@ -2,7 +2,7 @@
 
 import { Github, KeyRound, Loader2, LogIn, Mail, ShieldCheck } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 interface AuthConsoleProps {
   pendingVerificationEmail: string | null;
@@ -30,8 +30,22 @@ export function AuthConsole({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
+  const nameInputId = useId();
+  const emailInputId = useId();
+  const passwordInputId = useId();
+  const otpInputId = useId();
+  const formNoticeId = useId();
+  const formErrorId = useId();
+  const verificationNoticeId = useId();
+  const verificationErrorId = useId();
 
   const verificationEmail = useMemo(() => pendingVerificationEmail ?? email, [email, pendingVerificationEmail]);
+  const verificationDescriptionIds = [notice ? verificationNoticeId : null, error ? verificationErrorId : null]
+    .filter(Boolean)
+    .join(" ");
+  const formDescriptionIds = [notice ? formNoticeId : null, error ? formErrorId : null]
+    .filter(Boolean)
+    .join(" ");
 
   if (pendingVerificationEmail) {
     return (
@@ -50,29 +64,47 @@ export function AuthConsole({
                 onVerifyEmail(verificationEmail, otp.trim());
               }
             }}
+            aria-describedby={verificationDescriptionIds || undefined}
             style={{ display: "grid", gap: 14, marginTop: 18 }}
           >
-            <label style={fieldLabelStyle}>
+            <label htmlFor={otpInputId} style={fieldLabelStyle}>
               Verification code
               <input
+                id={otpInputId}
                 value={otp}
                 onChange={(event) => setOtp(event.target.value)}
                 inputMode="numeric"
                 maxLength={6}
                 autoComplete="one-time-code"
                 placeholder="123456"
+                required
+                aria-invalid={Boolean(error)}
+                aria-describedby={verificationDescriptionIds || undefined}
                 style={inputStyle}
               />
             </label>
 
-            <button type="submit" disabled={!otp.trim() || isSubmitting} style={primaryButtonStyle(!otp.trim() || isSubmitting)}>
+            <button
+              type="submit"
+              disabled={!otp.trim() || isSubmitting}
+              aria-busy={isSubmitting}
+              style={primaryButtonStyle(!otp.trim() || isSubmitting)}
+            >
               {isSubmitting ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ShieldCheck size={15} />}
               Verify & Enter
             </button>
           </form>
 
-          {notice ? <div style={noticeStyle}>{notice}</div> : null}
-          {error ? <div style={errorStyle}>{error}</div> : null}
+          {notice ? (
+            <div id={verificationNoticeId} role="status" aria-live="polite" style={noticeStyle}>
+              {notice}
+            </div>
+          ) : null}
+          {error ? (
+            <div id={verificationErrorId} role="alert" aria-live="assertive" style={errorStyle}>
+              {error}
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -88,10 +120,20 @@ export function AuthConsole({
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-          <button type="button" onClick={() => setMode("sign-in")} style={tabButtonStyle(mode === "sign-in")}>
+          <button
+            type="button"
+            onClick={() => setMode("sign-in")}
+            aria-pressed={mode === "sign-in"}
+            style={tabButtonStyle(mode === "sign-in")}
+          >
             Sign In
           </button>
-          <button type="button" onClick={() => setMode("sign-up")} style={tabButtonStyle(mode === "sign-up")}>
+          <button
+            type="button"
+            onClick={() => setMode("sign-up")}
+            aria-pressed={mode === "sign-up"}
+            style={tabButtonStyle(mode === "sign-up")}
+          >
             Create Account
           </button>
         </div>
@@ -106,46 +148,67 @@ export function AuthConsole({
             }
             onSignUp(name.trim(), email.trim(), password);
           }}
+          aria-describedby={formDescriptionIds || undefined}
           style={{ display: "grid", gap: 14, marginTop: 18 }}
         >
           {mode === "sign-up" ? (
-            <label style={fieldLabelStyle}>
+            <label htmlFor={nameInputId} style={fieldLabelStyle}>
               Name
               <input
+                id={nameInputId}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
+                name="name"
                 autoComplete="name"
                 placeholder="Operator name"
+                required
+                aria-invalid={Boolean(error)}
+                aria-describedby={formDescriptionIds || undefined}
                 style={inputStyle}
               />
             </label>
           ) : null}
 
-          <label style={fieldLabelStyle}>
+          <label htmlFor={emailInputId} style={fieldLabelStyle}>
             Email
             <input
+              id={emailInputId}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
+              name="email"
               type="email"
               autoComplete="email"
               placeholder="you@domain.com"
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={formDescriptionIds || undefined}
               style={inputStyle}
             />
           </label>
 
-          <label style={fieldLabelStyle}>
+          <label htmlFor={passwordInputId} style={fieldLabelStyle}>
             Password
             <input
+              id={passwordInputId}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              name="password"
               type="password"
               autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
               placeholder="••••••••"
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={formDescriptionIds || undefined}
               style={inputStyle}
             />
           </label>
 
-          <button type="submit" disabled={!email.trim() || !password.trim() || isSubmitting} style={primaryButtonStyle(!email.trim() || !password.trim() || isSubmitting)}>
+          <button
+            type="submit"
+            disabled={!email.trim() || !password.trim() || isSubmitting}
+            aria-busy={isSubmitting}
+            style={primaryButtonStyle(!email.trim() || !password.trim() || isSubmitting)}
+          >
             {isSubmitting ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <LogIn size={15} />}
             {mode === "sign-in" ? "Sign In" : "Create Account"}
           </button>
@@ -171,8 +234,16 @@ export function AuthConsole({
           Local browser sessions stay on your machine. Only mission state and preview frames are relayed through InsForge.
         </div>
 
-        {notice ? <div style={noticeStyle}>{notice}</div> : null}
-        {error ? <div style={errorStyle}>{error}</div> : null}
+        {notice ? (
+          <div id={formNoticeId} role="status" aria-live="polite" style={noticeStyle}>
+            {notice}
+          </div>
+        ) : null}
+        {error ? (
+          <div id={formErrorId} role="alert" aria-live="assertive" style={errorStyle}>
+            {error}
+          </div>
+        ) : null}
       </div>
     </div>
   );

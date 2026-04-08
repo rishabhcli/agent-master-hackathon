@@ -1,7 +1,7 @@
 "use client";
 
 import { Activity, Eye, Lightbulb, Monitor, Radio, RotateCcw, Search, StopCircle, Zap } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { getAgentById, getLogIcon, type LogEntry } from "../hooks/useAgentData";
 import type { FinalOptionsPayload } from "../hooks/useMasterBuildDashboard";
 
@@ -44,6 +44,11 @@ export function CommandOverlay({
   const [showFinalOptions, setShowFinalOptions] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const logRef = useRef<HTMLDivElement>(null);
+  const finalOptionsRef = useRef<HTMLDivElement>(null);
+  const closeFinalOptionsButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusedElementRef = useRef<HTMLElement | null>(null);
+  const finalOptionsTitleId = useId();
+  const finalOptionsDescriptionId = useId();
 
   useEffect(() => {
     if (finalOptions) setShowFinalOptions(true);
@@ -54,6 +59,70 @@ export function CommandOverlay({
       logRef.current.scrollTop = 0;
     }
   }, [logs]);
+
+  useEffect(() => {
+    if (!(showFinalOptions && finalOptions)) {
+      return;
+    }
+
+    previousFocusedElementRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const frameId = window.requestAnimationFrame(() => {
+      closeFinalOptionsButtonRef.current?.focus();
+    });
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      document.body.style.overflow = previousOverflow;
+      previousFocusedElementRef.current?.focus();
+    };
+  }, [finalOptions, showFinalOptions]);
+
+  useEffect(() => {
+    if (!(showFinalOptions && finalOptions)) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShowFinalOptions(false);
+        return;
+      }
+
+      if (event.key !== "Tab" || !finalOptionsRef.current) {
+        return;
+      }
+
+      const focusableElements = Array.from(
+        finalOptionsRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true");
+
+      if (focusableElements.length === 0) {
+        return;
+      }
+
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (event.shiftKey && activeElement === firstFocusable) {
+        event.preventDefault();
+        lastFocusable.focus();
+      } else if (!event.shiftKey && activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [finalOptions, showFinalOptions]);
 
   const handleReset = async () => {
     // First send stop command to kill browser sessions, then reset DB
@@ -103,7 +172,13 @@ export function CommandOverlay({
     <>
       {showFinalOptions && finalOptions ? (
         <div
+          ref={finalOptionsRef}
           data-testid="final-options-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={finalOptionsTitleId}
+          aria-describedby={finalOptionsDescriptionId}
+          tabIndex={-1}
           style={{
             position: "fixed",
             top: 78,
@@ -123,12 +198,18 @@ export function CommandOverlay({
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "#a855f7" }}>
+            <div
+              id={finalOptionsTitleId}
+              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "#a855f7" }}
+            >
               <Lightbulb size={14} />
               {finalOptions.isFinal ? "Final Options" : "Market Research Snapshot"}
             </div>
             <button
+              ref={closeFinalOptionsButtonRef}
+              type="button"
               onClick={() => setShowFinalOptions(false)}
+              aria-label="Close final options dialog"
               style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 16, padding: "0 4px" }}
             >
               ✕
@@ -136,7 +217,10 @@ export function CommandOverlay({
           </div>
           <div style={{ display: "grid", gap: 18 }}>
             <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "#94a3b8" }}>
+              <div
+                id={finalOptionsDescriptionId}
+                style={{ fontSize: 11, letterSpacing: 1.6, textTransform: "uppercase", color: "#94a3b8" }}
+              >
                 Market Research Summary
               </div>
               <div style={{ fontSize: 12.5, color: "#e2e8f0", lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
@@ -202,7 +286,7 @@ export function CommandOverlay({
                   </div>
                   {coverage.readyForLovable && finalOptions.lovableHandoff?.launchUrl ? (
                     <a
-                      data-testid="lovable-launch"
+                      data-testid="lovable-launch-link"
                       href={finalOptions.lovableHandoff.launchUrl}
                       target="_blank"
                       rel="noreferrer"
@@ -224,7 +308,7 @@ export function CommandOverlay({
                     </a>
                   ) : (
                     <button
-                      data-testid="lovable-launch"
+                      data-testid="lovable-launch-disabled"
                       disabled
                       style={{
                         padding: "10px 14px",
@@ -244,6 +328,7 @@ export function CommandOverlay({
                     type="button"
                     data-testid="lovable-copy-prompt"
                     onClick={handleCopyLovablePrompt}
+                    aria-live="polite"
                     style={{
                       padding: "9px 12px",
                       borderRadius: 12,

@@ -192,16 +192,20 @@ class BuilderAgent:
             metadata={"gaps": gaps},
         )
         # Signal research agents to dig deeper on gaps
+        source_agent_ids = (1, 2, 3, 4)
         for gap in gaps[:3]:
-            try:
-                await self.client.append_signal(
-                    self.mission_id, from_agent=self.agent_id, to_agent=0,
-                    signal_type="research_request",
-                    message=f"Builder needs more research on: {gap}",
-                    payload={"gap": gap, "iteration": self._iteration},
-                )
-            except Exception:
-                pass
+            for target_agent_id in source_agent_ids:
+                try:
+                    await self.client.append_signal(
+                        self.mission_id,
+                        from_agent=self.agent_id,
+                        to_agent=target_agent_id,
+                        signal_type="research_request",
+                        message=f"Builder needs more research on: {gap}",
+                        payload={"gap": gap, "iteration": self._iteration},
+                    )
+                except Exception:
+                    pass
 
     async def _stage_schema(self, business_plan: str) -> dict[str, Any]:
         prev_schema = self._outputs.get("schema", {})

@@ -225,6 +225,9 @@ begin
 end;
 $$;
 
+revoke all on function public.reset_masterbuild() from public;
+grant execute on function public.reset_masterbuild() to authenticated;
+
 create or replace function public.start_masterbuild_mission(mission_prompt text)
 returns table (
   mission_id uuid,
@@ -298,3 +301,6 @@ begin
   select v_mission_id, mission_prompt, 'queued'::text;
 end;
 $$;
+
+revoke all on function public.start_masterbuild_mission(text) from public;
+grant execute on function public.start_masterbuild_mission(text) to authenticated;

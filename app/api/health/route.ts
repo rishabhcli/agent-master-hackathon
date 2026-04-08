@@ -14,14 +14,18 @@ export async function GET() {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
+      const probeToken =
+        process.env.MASTERBUILD_INSFORGE_TOKEN ??
+        process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY ??
+        "";
       const response = await fetch(`${insforgeUrl}/api/database/records/missions?limit=0`, {
         signal: controller.signal,
         headers: {
-          Authorization: `Bearer ${process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY ?? ""}`,
+          Authorization: `Bearer ${probeToken}`,
         },
       });
       clearTimeout(timeout);
-      backendReachable = response.ok || response.status === 401;
+      backendReachable = response.ok || response.status === 401 || response.status === 403;
     } catch {
       backendReachable = false;
     }

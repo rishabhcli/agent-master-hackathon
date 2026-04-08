@@ -128,7 +128,7 @@ test.describe("MasterBuild mission flow", () => {
       const optionCards = page.locator('[data-testid^="final-option-"]');
       await expect(optionCards).toHaveCount(3, { timeout: 10_000 });
       await expect(page.locator("text=Primary Winner")).toHaveCount(1);
-      const lovableLaunch = page.getByTestId("lovable-launch");
+      const lovableLaunch = page.getByTestId("lovable-launch-link");
       await expect(lovableLaunch).toBeVisible();
       await expect(lovableLaunch).toHaveAttribute("href", /https:\/\/lovable\.dev\//);
       await expect(page.getByTestId("lovable-copy-prompt")).toBeVisible();

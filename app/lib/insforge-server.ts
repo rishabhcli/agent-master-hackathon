@@ -7,6 +7,9 @@ import { MASTERBUILD_PREVIEW_ACCESS_COOKIE } from "./previewAccess";
 const DEFAULT_BASE_URL = "";
 const PREVIEW_AUTH_BYPASS_ENV =
   process.env.MASTERBUILD_SKIP_PREVIEW_AUTH || process.env.MASTERBUILD_BYPASS_PREVIEW_AUTH;
+export const NO_STORE_HEADERS = {
+  "Cache-Control": "no-store, no-cache, must-revalidate"
+} as const;
 
 function isPreviewAuthBypassed(request?: Request) {
   const normalized = (PREVIEW_AUTH_BYPASS_ENV ?? "").toLowerCase();
@@ -22,7 +25,12 @@ function isPreviewAuthBypassed(request?: Request) {
   return host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
 }
 
-function getServerInsforgeClient(accessToken: string) {
+function getStoredPreviewAccessToken() {
+  return cookies().get(MASTERBUILD_PREVIEW_ACCESS_COOKIE)?.value ?? null;
+}
+
+export function createServerInsforgeClient(accessToken?: string) {
+  const resolvedAccessToken = accessToken ?? getStoredPreviewAccessToken();
   const baseUrl =
     process.env.MASTERBUILD_INSFORGE_URL ??
     process.env.NEXT_PUBLIC_INSFORGE_URL ??
@@ -30,12 +38,28 @@ function getServerInsforgeClient(accessToken: string) {
   if (!baseUrl) {
     throw new Error("Missing MASTERBUILD_INSFORGE_URL or NEXT_PUBLIC_INSFORGE_URL");
   }
+  if (!resolvedAccessToken) {
+    throw new Error("Missing preview access token");
+  }
   return createClient({
     baseUrl,
     anonKey: process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY ?? "",
     isServerMode: true,
-    edgeFunctionToken: accessToken
+    edgeFunctionToken: resolvedAccessToken
   });
+}
+
+export function isSameOriginRequest(request: Request) {
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    return true;
+  }
+
+  try {
+    return origin === new URL(request.url).origin;
+  } catch {
+    return false;
+  }
 }
 
 export async function hasPreviewAccess(request?: Request) {
@@ -43,12 +67,12 @@ export async function hasPreviewAccess(request?: Request) {
     return true;
   }
 
-  const accessToken = cookies().get(MASTERBUILD_PREVIEW_ACCESS_COOKIE)?.value;
+  const accessToken = getStoredPreviewAccessToken();
   if (!accessToken) {
     return false;
   }
 
-  const client = getServerInsforgeClient(accessToken);
+  const client = createServerInsforgeClient(accessToken);
   const result = await client.auth.getCurrentUser();
   return Boolean(result.data?.user && !result.error);
 }

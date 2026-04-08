@@ -6,15 +6,24 @@
 
 import { chromium } from "playwright";
 import { spawn, execSync } from "child_process";
-import path from "path";
 
-const APP_URL = "http://localhost:3000";
-const TEST_EMAIL = "rb.robbie99@gmail.com";
-const TEST_PASSWORD = "masterbuild2024";
+const APP_URL = process.env.MASTERBUILD_APP_URL ?? "http://localhost:3000";
 const MISSION_PROMPT = "Find an effective business plan for selling used trucks";
 const CWD = process.cwd();
 
+function getRequiredEnv(name: string) {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(
+      `Missing ${name}. Export the dashboard credentials before running this script.`
+    );
+  }
+  return value;
+}
+
 async function main() {
+  const testEmail = getRequiredEnv("MASTERBUILD_TEST_EMAIL");
+  const testPassword = getRequiredEnv("MASTERBUILD_TEST_PASSWORD");
   console.log("[flow] Launching visible Chrome browser for dashboard...");
 
   const browser = await chromium.launch({
@@ -42,8 +51,8 @@ async function main() {
 
   if (hasAuthForm) {
     console.log("[flow] Auth form detected — filling credentials...");
-    await emailField.fill(TEST_EMAIL);
-    await page.locator('input[type="password"]').fill(TEST_PASSWORD);
+    await emailField.fill(testEmail);
+    await page.locator('input[type="password"]').fill(testPassword);
     await page.screenshot({ path: "runtime/previews/flow-02-auth-filled.png" });
 
     // Submit form

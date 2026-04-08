@@ -63,27 +63,19 @@ Apply both via the InsForge MCP `run-raw-sql` tool.
 
 ## Setup
 
-1. Install frontend dependencies:
+1. Bootstrap the local toolchain:
 
 ```bash
-npm install
+npm run bootstrap
 ```
 
-2. Install Python dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-3. Copy the environment template:
+2. Copy the environment template:
 
 ```bash
 cp .env.example .env.local
 ```
 
-4. Fill in these values:
+3. Fill in these values:
 
 - `NEXT_PUBLIC_INSFORGE_ANON_KEY`
 - `MASTERBUILD_INSFORGE_TOKEN`
@@ -93,15 +85,15 @@ cp .env.example .env.local
 
 `NEXT_PUBLIC_INSFORGE_URL`, `MASTERBUILD_INSFORGE_URL`, and `MINIMAX_BASE_URL` default to the linked backend and the international MiniMax endpoint.
 
-5. Apply the database schema (both files, in order) via InsForge MCP `run-raw-sql`.
+4. Apply the database schema (both files, in order) via InsForge MCP `run-raw-sql`.
 
-6. Start the UI:
+5. Start the UI:
 
 ```bash
 npm run dev
 ```
 
-7. Start the orchestrator in another terminal:
+6. Start the orchestrator in another terminal:
 
 ```bash
 source .venv/bin/activate
@@ -114,6 +106,8 @@ You can also use the helper scripts:
 ./start_orchestrator.sh
 ./start_mission_watcher.sh
 ```
+
+The committed `.mcp.json` is intentionally scrubbed. Set local-only InsForge MCP credentials before using MCP-backed admin flows.
 
 ## Mission Flow
 
@@ -128,15 +122,22 @@ You can also use the helper scripts:
 ## Testing
 
 ```bash
-# Python unit tests (26 tests)
-source .venv/bin/activate
-python -m pytest tests/ -v
+# Install local dependencies and browser tooling
+npm run bootstrap
 
-# TypeScript type checking
-npm run typecheck
+# Run the standard local validation bundle
+npm run check
 
-# E2E tests (requires running system)
-npx playwright test
+# E2E tests (requires a running app and orchestrator)
+PLAYWRIGHT_BASE_URL=http://localhost:3000 npx playwright test
+```
+
+For the optional full-flow dashboard automation script, export runtime-only credentials first:
+
+```bash
+export MASTERBUILD_TEST_EMAIL="operator@example.com"
+export MASTERBUILD_TEST_PASSWORD="replace-me"
+npx tsx run_full_flow.ts
 ```
 
 ## Key Files

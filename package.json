@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "bootstrap": "./scripts/bootstrap.sh",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "./scripts/check.sh"
   },
   "dependencies": {
     "@insforge/sdk": "^1.0.0",

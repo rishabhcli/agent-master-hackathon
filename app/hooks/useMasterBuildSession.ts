@@ -8,7 +8,6 @@ import {
   insforge,
   isPreviewAuthBypassed,
   isUnsignedSessionError,
-  primeInsforgeAccessTokenFromCookie,
   shouldBootstrapInsforgeSession,
   syncPreviewAccessTokenCookie
 } from "../lib/insforge";
@@ -54,7 +53,7 @@ export function useMasterBuildSession() {
     if (!shouldBootstrapInsforgeSession()) {
       setUser(null);
       setError(null);
-      clearPreviewAccessTokenCookie();
+      await clearPreviewAccessTokenCookie();
       setIsLoading(false);
       return;
     }
@@ -68,7 +67,6 @@ export function useMasterBuildSession() {
         return;
       }
 
-      primeInsforgeAccessTokenFromCookie();
       const result = await insforge.auth.getCurrentUser();
       if (result.error && !isUnsignedSessionError(result.error)) {
         throw result.error;
@@ -76,14 +74,14 @@ export function useMasterBuildSession() {
 
       const nextUser = result.data?.user as MasterBuildUser | null | undefined;
       setUser(nextUser ?? null);
-      syncPreviewAccessTokenCookie();
+      await syncPreviewAccessTokenCookie();
       setError(null);
     } catch (caughtError) {
       const message =
         caughtError instanceof Error ? caughtError.message : "Unable to load the current InsForge session.";
       setError(message);
       setUser(null);
-      clearPreviewAccessTokenCookie();
+      await clearPreviewAccessTokenCookie();
     } finally {
       setIsLoading(false);
     }
@@ -189,7 +187,7 @@ export function useMasterBuildSession() {
     try {
       if (isPreviewAuthBypassed()) {
         setUser(getPreviewBypassUser());
-        clearPreviewAccessTokenCookie();
+        await clearPreviewAccessTokenCookie();
         setError(null);
         setNotice("Local preview auth bypass is enabled.");
         return;
@@ -201,7 +199,7 @@ export function useMasterBuildSession() {
       }
       setUser(null);
       setPendingVerificationEmail(null);
-      clearPreviewAccessTokenCookie();
+      await clearPreviewAccessTokenCookie();
       setError(null);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Sign-out failed.";

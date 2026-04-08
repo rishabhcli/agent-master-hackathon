@@ -30,6 +30,7 @@ def mock_insforge_client():
     client.insert_records = AsyncMock(return_value=None)
     client.update_records = AsyncMock(return_value=None)
     client.append_log = AsyncMock(return_value=None)
+    client.append_signal = AsyncMock(return_value=None)
     client.append_thought = AsyncMock(return_value=None)
     client.append_business_plan = AsyncMock(return_value=None)
     client.get_recent_discoveries = AsyncMock(return_value=[])

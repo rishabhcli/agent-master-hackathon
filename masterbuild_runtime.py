@@ -698,11 +698,14 @@ class InsForgeRuntimeClient:
                 return None
             raise
 
-    async def get_agents(self) -> list[dict[str, Any]]:
+    async def get_agents(self, mission_id: str | None = None) -> list[dict[str, Any]]:
         try:
+            params: dict[str, Any] = {"order": "agent_id.asc", "limit": MAX_AGENT_ID}
+            if mission_id:
+                params["mission_id"] = f"eq.{mission_id}"
             return await self.list_records(
                 "agents",
-                params={"order": "agent_id.asc", "limit": MAX_AGENT_ID},
+                params=params,
                 retry_on_429=False,
             )
         except Exception as error:
@@ -711,11 +714,14 @@ class InsForgeRuntimeClient:
                 return []
             raise
 
-    async def get_recent_discoveries(self, limit: int = 20) -> list[dict[str, Any]]:
+    async def get_recent_discoveries(self, limit: int = 20, *, mission_id: str | None = None) -> list[dict[str, Any]]:
         try:
+            params: dict[str, Any] = {"order": "created_at.desc", "limit": limit}
+            if mission_id:
+                params["mission_id"] = f"eq.{mission_id}"
             return await self.list_records(
                 "discoveries",
-                params={"order": "created_at.desc", "limit": limit},
+                params=params,
                 retry_on_429=False,
             )
         except Exception as error:
@@ -724,11 +730,14 @@ class InsForgeRuntimeClient:
                 return []
             raise
 
-    async def get_pending_commands(self) -> list[dict[str, Any]]:
+    async def get_pending_commands(self, *, mission_id: str | None = None) -> list[dict[str, Any]]:
         try:
+            params: dict[str, Any] = {"status": "eq.pending", "order": "created_at.asc", "limit": 25}
+            if mission_id:
+                params["mission_id"] = f"eq.{mission_id}"
             return await self.list_records(
                 "control_commands",
-                params={"status": "eq.pending", "order": "created_at.asc", "limit": 25},
+                params=params,
                 retry_on_429=False,
             )
         except Exception as error:
@@ -747,12 +756,15 @@ class InsForgeRuntimeClient:
     async def update_mission(self, mission_id: str, **values: Any) -> None:
         await self.update_records("missions", filters={"id": f"eq.{mission_id}"}, values=values)
 
-    async def update_agent(self, agent_id: int, **values: Any) -> None:
+    async def update_agent(self, agent_id: int, *, mission_id: str | None = None, **values: Any) -> None:
         values.setdefault("updated_at", utc_now())
+        filters = {"agent_id": f"eq.{agent_id}"}
+        if mission_id:
+            filters["mission_id"] = f"eq.{mission_id}"
         try:
             await self.update_records(
                 "agents",
-                filters={"agent_id": f"eq.{agent_id}"},
+                filters=filters,
                 values=values,
                 retry_on_429=False,
             )
@@ -1834,7 +1846,7 @@ class MasterBuildOrchestrator:
 
             # ── Final business plan synthesis ──────────────────────────
             try:
-                discoveries = await self.client.get_recent_discoveries(30)
+                discoveries = await self.client.get_recent_discoveries(30, mission_id=mission_id)
                 if discoveries:
                     current_plan = agent_context.get_business_plan()
                     discovery_dicts = [
@@ -1902,7 +1914,7 @@ class MasterBuildOrchestrator:
 
     async def monitor_control_commands(self, mission_id: str) -> None:
         while not self.stop_event.is_set():
-            commands = await self.client.get_pending_commands()
+            commands = await self.client.get_pending_commands(mission_id=mission_id)
             for command in commands:
                 command_name = str(command.get("command", ""))
                 if command_name == "stop_all":
@@ -1938,7 +1950,7 @@ class MasterBuildOrchestrator:
         await asyncio.sleep(40)  # Let agents gather initial data
         while not self.stop_event.is_set():
             try:
-                discoveries = await self.client.get_recent_discoveries(30)
+                discoveries = await self.client.get_recent_discoveries(30, mission_id=mission_id)
                 new_count = len(discoveries)
                 if new_count >= last_discovery_count + synthesis_threshold:
                     last_discovery_count = new_count
@@ -2265,7 +2277,7 @@ class MasterBuildOrchestrator:
         spec: AgentSpec,
         is_final: bool,
     ) -> dict[str, Any] | None:
-        discoveries = await self.client.get_recent_discoveries(24)
+        discoveries = await self.client.get_recent_discoveries(24, mission_id=mission_id)
         if not discoveries:
             return None
 
@@ -2356,7 +2368,7 @@ class MasterBuildOrchestrator:
             )
 
             while not self.stop_event.is_set():
-                discoveries = await self.client.get_recent_discoveries(24)
+                discoveries = await self.client.get_recent_discoveries(24, mission_id=mission_id)
                 valid_discoveries = filter_valid_discoveries(discoveries)
                 coverage = build_platform_coverage(valid_discoveries)
                 if coverage["readyForLovable"]:
@@ -2396,6 +2408,7 @@ class MasterBuildOrchestrator:
         except Exception as error:
             await self.client.update_agent(
                 spec.agent_id,
+                mission_id=mission_id,
                 status="error",
                 energy=0,
                 last_heartbeat=utc_now(),
@@ -2410,6 +2423,7 @@ class MasterBuildOrchestrator:
         finally:
             await self.client.update_agent(
                 spec.agent_id,
+                mission_id=mission_id,
                 status="stopped",
                 session_id=None,
                 preview_bucket=None,
@@ -3308,7 +3322,9 @@ class MasterBuildOrchestrator:
             final_result = history.final_result() if hasattr(history, 'final_result') else str(history)
             agent_context.log_agent_action(spec.agent_id, "done", str(final_result)[:200])
             await self.client.update_agent(
-                spec.agent_id, status="found_trend",
+                spec.agent_id,
+                mission_id=mission_id,
+                status="found_trend",
                 energy=50, last_heartbeat=utc_now(),
             )
             await self.client.append_log(
@@ -3320,7 +3336,11 @@ class MasterBuildOrchestrator:
             raise
         except Exception as error:
             await self.client.update_agent(
-                spec.agent_id, status="error", energy=0, last_heartbeat=utc_now(),
+                spec.agent_id,
+                mission_id=mission_id,
+                status="error",
+                energy=0,
+                last_heartbeat=utc_now(),
             )
             await self.client.append_log(
                 mission_id, agent_id=spec.agent_id, log_type="error",
@@ -3339,9 +3359,14 @@ class MasterBuildOrchestrator:
             if last_preview_key:
                 await self.client.delete_storage_object(self.client.preview_bucket, last_preview_key)
             await self.client.update_agent(
-                spec.agent_id, status="stopped", session_id=None,
-                preview_bucket=None, preview_key=None,
-                preview_updated_at=None, last_heartbeat=utc_now(),
+                spec.agent_id,
+                mission_id=mission_id,
+                status="stopped",
+                session_id=None,
+                preview_bucket=None,
+                preview_key=None,
+                preview_updated_at=None,
+                last_heartbeat=utc_now(),
             )
 
 

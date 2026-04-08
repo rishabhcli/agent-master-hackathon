@@ -104,12 +104,33 @@ function getStatusTone(status: string, isActive: boolean) {
   };
 }
 
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    updatePreference();
+
+    mediaQuery.addEventListener("change", updatePreference);
+    return () => mediaQuery.removeEventListener("change", updatePreference);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
 function SessionCard({
   session,
-  onSelect
+  onSelect,
+  prefersReducedMotion
 }: {
   session: SessionViewModel;
   onSelect: (agentId: number) => void;
+  prefersReducedMotion: boolean;
 }) {
   const { frameUrl, metadata, accessError } = useAgentPreview(session.agentId, {
     enabled: true
@@ -164,8 +185,10 @@ function SessionCard({
         boxShadow: isLive
           ? `0 0 12px 2px ${session.color}33, 0 0 32px 6px ${session.color}18`
           : `0 12px 32px ${session.color}10`,
-        animation: isLive ? "mb-glow-pulse 2.4s ease-in-out infinite" : "none",
-        transition: "transform 280ms cubic-bezier(0.16, 1, 0.3, 1), border-color 280ms ease, box-shadow 280ms ease",
+        animation: isLive && !prefersReducedMotion ? "mb-glow-pulse 2.4s ease-in-out infinite" : "none",
+        transition: prefersReducedMotion
+          ? "border-color 180ms ease, box-shadow 180ms ease"
+          : "transform 280ms cubic-bezier(0.16, 1, 0.3, 1), border-color 280ms ease, box-shadow 280ms ease",
         willChange: "transform, box-shadow",
         position: "relative",
       }}
@@ -183,17 +206,17 @@ function SessionCard({
           ref={imgRef}
           src={frameUrl}
           alt={`${session.name} preview`}
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            display: "block",
-            transition: "opacity 120ms ease-out",
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+              display: "block",
+              transition: prefersReducedMotion ? "none" : "opacity 120ms ease-out",
           }}
         />
 
         {/* Scanline overlay when live */}
-        {isLive && (
+        {isLive && !prefersReducedMotion && (
           <div
             style={{
               position: "absolute",
@@ -344,10 +367,12 @@ function SessionCard({
 
 function FocusedSession({
   session,
-  onBack
+  onBack,
+  prefersReducedMotion
 }: {
   session: SessionViewModel;
   onBack: () => void;
+  prefersReducedMotion: boolean;
 }) {
   const { frameUrl, metadata, accessError } = useAgentPreview(session.agentId);
   const status = metadata.status || session.status;
@@ -480,7 +505,7 @@ function FocusedSession({
           boxShadow: isLive
             ? `0 0 20px 4px ${session.color}33, 0 0 60px 12px ${session.color}18`
             : `0 24px 80px ${session.color}16`,
-          animation: isLive ? "mb-glow-pulse 2.4s ease-in-out infinite" : "none",
+          animation: isLive && !prefersReducedMotion ? "mb-glow-pulse 2.4s ease-in-out infinite" : "none",
           transform: "translateZ(0)",
         }}
       >
@@ -493,11 +518,11 @@ function FocusedSession({
             height: "100%",
             objectFit: "cover",
             display: "block",
-            transition: "opacity 150ms ease-out",
+            transition: prefersReducedMotion ? "none" : "opacity 150ms ease-out",
           }}
         />
 
-        {isLive && (
+        {isLive && !prefersReducedMotion && (
           <div
             style={{
               position: "absolute",
@@ -559,6 +584,7 @@ export function CommandCenterScene({
   isRunning: boolean;
 }) {
   const [focusedAgentId, setFocusedAgentId] = useState<number | null>(null);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   const agentMap = useMemo(() => {
     const map = new Map<number, AgentData>();
@@ -626,9 +652,14 @@ export function CommandCenterScene({
         </div>
 
         {focusedSession ? (
-          <FocusedSession session={focusedSession} onBack={() => setFocusedAgentId(null)} />
+          <FocusedSession
+            session={focusedSession}
+            onBack={() => setFocusedAgentId(null)}
+            prefersReducedMotion={prefersReducedMotion}
+          />
         ) : (
           <div
+            data-testid="session-strip"
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 1fr",
@@ -642,6 +673,7 @@ export function CommandCenterScene({
                 key={session.agentId}
                 session={session}
                 onSelect={setFocusedAgentId}
+                prefersReducedMotion={prefersReducedMotion}
               />
             ))}
           </div>

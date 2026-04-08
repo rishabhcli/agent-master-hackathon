@@ -1,7 +1,6 @@
 "use client";
 
 import { createClient } from "@insforge/sdk";
-import { MASTERBUILD_PREVIEW_ACCESS_COOKIE } from "./previewAccess";
 
 const INSFORGE_CSRF_COOKIE = "insforge_csrf_token";
 const PREVIEW_AUTH_BYPASS_ENV =
@@ -57,55 +56,42 @@ function getAccessTokenFromHeaders() {
   return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : null;
 }
 
-function getAccessTokenFromCookie() {
-  if (typeof document === "undefined") {
-    return null;
-  }
-
-  const entry = document.cookie
-    .split(";")
-    .map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith(`${MASTERBUILD_PREVIEW_ACCESS_COOKIE}=`));
-
-  if (!entry) {
-    return null;
-  }
-
-  const rawValue = entry.slice(`${MASTERBUILD_PREVIEW_ACCESS_COOKIE}=`.length);
-  return rawValue ? decodeURIComponent(rawValue) : null;
-}
-
 export function primeInsforgeAccessTokenFromCookie() {
-  const token = getAccessTokenFromCookie();
-  insforge.getHttpClient().setAuthToken(token);
-  return token;
+  return null;
 }
 
-export function syncPreviewAccessTokenCookie() {
-  if (typeof document === "undefined") {
+async function updatePreviewAccessTokenCookie(method: "POST" | "DELETE", accessToken?: string | null) {
+  if (typeof window === "undefined") {
     return;
   }
 
+  try {
+    await fetch("/api/auth/preview-session", {
+      method,
+      headers: {
+        "Content-Type": "application/json"
+      },
+      credentials: "same-origin",
+      cache: "no-store",
+      body: method === "POST" ? JSON.stringify({ accessToken }) : undefined
+    });
+  } catch {
+    // Best-effort sync. Client auth still works even if the preview relay cookie update fails.
+  }
+}
+
+export async function syncPreviewAccessTokenCookie() {
   const token = getAccessTokenFromHeaders();
-  const secure = window.location.protocol === "https:" ? "; Secure" : "";
-
   if (!token) {
-    document.cookie = `${MASTERBUILD_PREVIEW_ACCESS_COOKIE}=; path=/; max-age=0; SameSite=Lax${secure}`;
+    await updatePreviewAccessTokenCookie("DELETE");
     return;
   }
 
-  document.cookie = `${MASTERBUILD_PREVIEW_ACCESS_COOKIE}=${encodeURIComponent(
-    token
-  )}; path=/; SameSite=Lax${secure}`;
+  await updatePreviewAccessTokenCookie("POST", token);
 }
 
-export function clearPreviewAccessTokenCookie() {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${MASTERBUILD_PREVIEW_ACCESS_COOKIE}=; path=/; max-age=0; SameSite=Lax${secure}`;
+export async function clearPreviewAccessTokenCookie() {
+  await updatePreviewAccessTokenCookie("DELETE");
 }
 
 export function isUnsignedSessionError(error: unknown) {
@@ -136,7 +122,6 @@ export function shouldBootstrapInsforgeSession() {
   }
 
   return (
-    document.cookie.includes(`${INSFORGE_CSRF_COOKIE}=`) ||
-    document.cookie.includes(`${MASTERBUILD_PREVIEW_ACCESS_COOKIE}=`)
+    document.cookie.includes(`${INSFORGE_CSRF_COOKIE}=`)
   );
 }

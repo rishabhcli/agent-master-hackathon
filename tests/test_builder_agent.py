@@ -122,6 +122,24 @@ class TestBuilderReport:
         assert "Schema" in report
 
 
+class TestBuilderSignals:
+    """Test builder-to-research signaling behavior."""
+
+    @pytest.mark.asyncio
+    async def test_refinement_feedback_targets_source_agents(self, builder, mock_insforge_client):
+        """Builder refinement feedback should target real source agents, not an invalid broadcast id."""
+        builder._outputs["proficiency_eval"] = {
+            "gaps": ["pricing validation", "distribution channels"],
+        }
+
+        await builder._generate_refinement_feedback("Business plan")
+
+        calls = mock_insforge_client.append_signal.await_args_list
+        assert len(calls) == 8
+        target_agent_ids = [call.kwargs["to_agent"] for call in calls]
+        assert set(target_agent_ids) == {1, 2, 3, 4}
+
+
 class TestBuilderInsForgeIntegration:
     """Test that builder writes to InsForge tables."""
 

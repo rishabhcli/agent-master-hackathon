@@ -6,7 +6,6 @@ import {
   insforge,
   isPreviewAuthBypassed,
   isUnsignedSessionError,
-  primeInsforgeAccessTokenFromCookie,
   shouldBootstrapInsforgeSession,
   syncPreviewAccessTokenCookie
 } from "../lib/insforge";
@@ -115,7 +114,7 @@ export function useAgentPreview(
 
         if (!allowGuestPreview && !shouldBootstrapInsforgeSession()) {
           if (!isMounted) return;
-          clearPreviewAccessTokenCookie();
+          await clearPreviewAccessTokenCookie();
           setAccessError("Sign in to view the live local browser relay.");
           setMetadata({
             agentId,
@@ -133,7 +132,6 @@ export function useAgentPreview(
         }
 
         if (!allowGuestPreview) {
-          primeInsforgeAccessTokenFromCookie();
           const session = await insforge.auth.getCurrentUser();
           if (session.error && !isUnsignedSessionError(session.error)) {
             throw session.error;
@@ -141,7 +139,7 @@ export function useAgentPreview(
 
           if (!session.data?.user) {
             if (!isMounted) return;
-            clearPreviewAccessTokenCookie();
+            await clearPreviewAccessTokenCookie();
             setAccessError("Sign in to view the live local browser relay.");
             setMetadata({
               agentId,
@@ -158,7 +156,7 @@ export function useAgentPreview(
             return;
           }
 
-          syncPreviewAccessTokenCookie();
+          await syncPreviewAccessTokenCookie();
         }
 
         const result = await insforge.database
